@@ -52,7 +52,7 @@ class NodeCanvasApp:
                 messagebox.showerror("Erreur", str(e))
 
     def _load_background(self):
-        filepath = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.gif *.bmp")])
+        filepath = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.gif *.bmp *.webp")])
         if filepath:
             self.canvas.set_background_image(filepath)
 
@@ -61,6 +61,10 @@ class NodeCanvasApp:
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
+    try:
+        from tkinterdnd2 import TkinterDnD
+        root = TkinterDnD.Tk()
+    except ImportError:
+        root = tk.Tk()
     app = NodeCanvasApp(root)
     root.mainloop()
