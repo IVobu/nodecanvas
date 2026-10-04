@@ -5,6 +5,7 @@
 - Ordre d'empilement stable : fond < dossiers < liens < images < carrés.
 - Les tags sont préfixés (un id 100 % numérique serait pris pour un item Tk).
 """
+import math
 import os
 import uuid
 import tkinter as tk
@@ -14,8 +15,10 @@ from models import Square, Link, Folder
 try:
     from PIL import Image, ImageTk, ImageGrab
     PIL_AVAILABLE = True
+    RES = getattr(Image, "Resampling", Image)
+    TRANSPOSE = getattr(Image, "Transpose", Image)
 except ImportError:
-    Image = ImageTk = ImageGrab = None
+    Image = ImageTk = ImageGrab = RES = TRANSPOSE = None
     PIL_AVAILABLE = False
 
 try:
@@ -34,8 +37,17 @@ HEADER_H = 30            # en-tête d'un dossier ouvert (monde)
 ICON_W, ICON_H = 56, 42  # icône d'un dossier fermé (monde)
 FOLDER_MIN_W, FOLDER_MIN_H = 120, 80
 MIN_ZOOM, MAX_ZOOM = 0.1, 2.0
+ROT_HANDLE_DIST = 26      # distance de la poignée de rotation au bord (pixels écran)
+ROT_HIT = 10             # rayon de saisie de la poignée de rotation (pixels écran)
 SELECT_COLOR = "#4FC3F7"
 LOCK_COLOR = "#FFD700"
+
+
+def _rot(dx, dy, deg):
+    """Tourne le vecteur (dx, dy) de `deg` degrés dans le sens horaire (écran, y vers le bas)."""
+    a = math.radians(deg)
+    c, s = math.cos(a), math.sin(a)
+    return dx * c - dy * s, dx * s + dy * c
 
 
 class NodeCanvas(tk.Canvas):
@@ -80,6 +92,11 @@ class NodeCanvas(tk.Canvas):
         # --- caches d'images ---
         self._images = {}
         self._photo_cache = {}
+        self._base_cache = {}    # image ajustée + miroir (réutilisée pendant la rotation)
+        self._rot_ref = (0.0, 0.0)
+        self._corner0 = (0, 0)
+        self._anim_job = None
+        self._cursor = ""
 
         self._build_context_menu()
         self._bind_events()
@@ -100,10 +117,11 @@ class NodeCanvas(tk.Canvas):
         m.add_separator()
         m.add_command(label="Coller image (Ctrl+V)", command=self._paste_from_clipboard)
         m.add_separator()
-        m.add_command(label="Tourner image…", command=self._rotate_image)
-        m.add_command(label="Flip image…", command=self._flip_image)
-        m.add_separator()
-        m.add_command(label="Changer couleur du lien…", command=self._change_link_color)
+        m.add_command(label="Pivoter 90° ↻ (R)", command=lambda: self.rotate_selected(90))
+        m.add_command(label="Pivoter 90° ↺ (Maj+R)", command=lambda: self.rotate_selected(-90))
+        m.add_command(label="Miroir horizontal (H)", command=lambda: self.flip_selected(True))
+        m.add_command(label="Miroir vertical (V)", command=lambda: self.flip_selected(False))
+        m.add_command(label="Réinitialiser rotation/miroir (0)", command=self.reset_transform)
         m.add_separator()
         m.add_command(label="Verrouiller/Déverrouiller", command=self._toggle_lock)
         m.add_separator()
@@ -128,6 +146,13 @@ class NodeCanvas(tk.Canvas):
         self.bind("<F2>", lambda e: self._rename())
         self.bind("<Escape>", lambda e: self._cancel_connect())
         self.bind("<Control-Key-0>", lambda e: self.reset_zoom())
+        for key in ("r", "R"):
+            self.bind(f"<Key-{key}>", lambda e: self.rotate_selected(-90 if e.keysym == "R" else 90))
+        for key in ("h", "H"):
+            self.bind(f"<Key-{key}>", lambda e: self.flip_selected(True))
+        for key in ("v", "V"):
+            self.bind(f"<Key-{key}>", lambda e: self.flip_selected(False))
+        self.bind("<Key-0>", lambda e: self.reset_transform())
         self.bind_all("<Control-l>", lambda e: self.toggle_ignore_locked())
         self.bind_all("<Control-L>", lambda e: self.toggle_ignore_locked())
 
@@ -218,6 +243,32 @@ class NodeCanvas(tk.Canvas):
             return fd.x - 22, fd.y, fd.x + ICON_W + 22, fd.y + ICON_H + 24
         return fd.x, fd.y, fd.x + fd.w, fd.y + fd.h
 
+    def _sq_contains(self, sq, x, y):
+        rot = getattr(sq, "rotation", 0.0)
+        if not rot:
+            return sq.contains(x, y)
+        cx, cy = sq.center()
+        lx, ly = _rot(x - cx, y - cy, -rot)
+        h = sq.size / 2
+        return -h <= lx <= h and -h <= ly <= h
+
+    def _over_resize(self, sq, x, y):
+        """La souris est-elle sur la poignée de redimensionnement (coin bas-droit, tourné avec le carré) ?"""
+        cx, cy = sq.center()
+        lx, ly = _rot(x - cx, y - cy, -getattr(sq, "rotation", 0.0))
+        h, hw = sq.size / 2, self._handle_w()
+        return h - hw <= lx <= h and h - hw <= ly <= h
+
+    def _rot_handle_pos(self, sq):
+        cx, cy = sq.center()
+        d = sq.size / 2 + ROT_HANDLE_DIST / self.zoom
+        ox, oy = _rot(0, -d, getattr(sq, "rotation", 0.0))
+        return cx + ox, cy + oy
+
+    def _over_rot_handle(self, sq, x, y):
+        hx, hy = self._rot_handle_pos(sq)
+        return math.hypot(x - hx, y - hy) <= ROT_HIT / self.zoom
+
     def _hit(self, x, y):
         """Objet le plus haut sous le point (même pile que l'affichage)."""
         for obj in reversed(self._stack()):
@@ -226,7 +277,7 @@ class NodeCanvas(tk.Canvas):
                     continue
                 if self.ignore_locked and obj.locked:
                     continue
-                if obj.contains(x, y):
+                if self._sq_contains(obj, x, y):
                     return obj
             else:
                 x1, y1, x2, y2 = self._folder_rect(obj)
@@ -289,18 +340,11 @@ class NodeCanvas(tk.Canvas):
         self.folders = folders
         self._images.clear()
         self._photo_cache.clear()
+        self._base_cache.clear()
         self.selected_square = self.selected_folder = None
         self.hovered_square = self.hovered_folder = None
         self.connecting_from = self.connect_line = None
-        self.bg_rotation = 0
-        self.bg_locked = False
-        if isinstance(background_image, dict):
-            self.bg_rotation = background_image.get("rotation", 0)
-            self.bg_locked = bool(background_image.get("locked", False))
-            background_image = background_image.get("image", "")
         self.set_background_image(background_image)
-        if self.bg_locked:
-            self._redraw_background()
         self._redraw()
 
     # ------------------------------------------------------------------
@@ -387,7 +431,14 @@ class NodeCanvas(tk.Canvas):
         self.delete(tag)
         if not self._visible(sq):
             return
-        x1, y1, x2, y2 = sq.x * z, sq.y * z, (sq.x + sq.size) * z, (sq.y + sq.size) * z
+        rot = getattr(sq, "rotation", 0.0)
+        cx, cy = sq.center()
+        cx, cy, hs = cx * z, cy * z, sq.size * z / 2
+
+        def P(lx, ly):   # point local (par rapport au centre) -> écran
+            ox, oy = _rot(lx, ly, rot)
+            return cx + ox, cy + oy
+
         if sq is self.selected_square:
             outline, width = SELECT_COLOR, 3
         elif sq.locked:
@@ -395,22 +446,31 @@ class NodeCanvas(tk.Canvas):
         else:
             outline, width = "#FFFFFF", 2
         tags = ("square", tag)
-        self.create_rectangle(x1, y1, x2, y2, fill=sq.color, outline=outline, width=width, tags=tags)
-        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        flat = [v for p in (P(-hs, -hs), P(hs, -hs), P(hs, hs), P(-hs, hs)) for v in p]
+        self.create_polygon(flat, fill=sq.color, outline=outline, width=width, tags=tags)
         photo = self._photo_for(sq, fast)
         if photo:
             self.create_image(cx, cy, image=photo, tags=tags)
             font = self._font(7)
             if font:
-                self.create_text(cx, y2 - 10 * z, text=sq.name[:12], fill="#FFFFFF", font=font, tags=tags)
+                tx, ty = P(0, hs - 10 * z)
+                self.create_text(tx, ty, text=sq.name[:12], fill="#FFFFFF", font=font, tags=tags)
         else:
             font = self._font(9, True)
             if font:
+                opts = {"angle": -rot} if rot else {}
                 self.create_text(cx, cy, text=sq.name, fill="#FFFFFF", font=font,
-                                 width=max(int(sq.size * z) - 6, 10), tags=tags)
+                                 width=max(int(sq.size * z) - 6, 10), tags=tags, **opts)
         if not sq.locked:
-            h = min(HANDLE, (x2 - x1) / 2)
-            self.create_rectangle(x2 - h, y2 - h, x2, y2, fill=LOCK_COLOR, outline="#FFFFFF", width=1, tags=tags)
+            h = min(HANDLE, hs)
+            pts = [v for p in (P(hs - h, hs - h), P(hs, hs - h), P(hs, hs), P(hs - h, hs)) for v in p]
+            self.create_polygon(pts, fill=LOCK_COLOR, outline="#FFFFFF", width=1, tags=tags)
+            if sq is self.selected_square:      # poignée de rotation au-dessus du bord haut
+                x0, y0 = P(0, -hs)
+                hx, hy = P(0, -hs - ROT_HANDLE_DIST)
+                self.create_line(x0, y0, hx, hy, fill=SELECT_COLOR, width=2, tags=tags)
+                self.create_oval(hx - 6, hy - 6, hx + 6, hy + 6, fill="#FFFFFF",
+                                 outline=SELECT_COLOR, width=2, tags=tags)
         if keep_order:
             self._restore_order(sq)
 
@@ -525,7 +585,7 @@ class NodeCanvas(tk.Canvas):
             img = Image.open(self._resolve(path))
             img.load()
             img.thumbnail((MAX_IMG_SIDE, MAX_IMG_SIDE))
-            return img
+            return img.convert("RGBA")
         except Exception:
             return None
 
@@ -537,21 +597,30 @@ class NodeCanvas(tk.Canvas):
         img = self._images[sq.id]
         if img is None:
             return None
+        rot = getattr(sq, "rotation", 0.0) % 360
+        fh, fv = getattr(sq, "flip_h", False), getattr(sq, "flip_v", False)
         box = max(int(sq.size * self.zoom) - 4, 1)
-        key = (box, fast, sq.rotation, sq.flip)
+        key = (box, fast, round(rot, 2), fh, fv)
         cached = self._photo_cache.get(sq.id)
         if cached and cached[0] == key:
             return cached[1]
-        scale = min(box / img.width, box / img.height)
-        size = (max(int(img.width * scale), 1), max(int(img.height * scale), 1))
-        img = img.resize(size, Image.NEAREST if fast else Image.LANCZOS)
-        if sq.flip & 1:
-            img = img.transpose(Image.FLIP_LEFT_RIGHT)
-        if sq.flip & 2:
-            img = img.transpose(Image.FLIP_TOP_BOTTOM)
-        if sq.rotation:
-            img = img.rotate(-sq.rotation, expand=True, resample=Image.BICUBIC)
-        photo = ImageTk.PhotoImage(img)
+        # 1) ajustement + miroir : mis en cache, donc la rotation ne refait que l'étape 2
+        bkey = (box, fast, fh, fv)
+        bc = self._base_cache.get(sq.id)
+        if bc and bc[0] == bkey:
+            base = bc[1]
+        else:
+            scale = min(box / img.width, box / img.height)
+            size = (max(int(img.width * scale), 1), max(int(img.height * scale), 1))
+            base = img.resize(size, RES.BILINEAR if fast else RES.LANCZOS)
+            if fh:
+                base = base.transpose(TRANSPOSE.FLIP_LEFT_RIGHT)
+            if fv:
+                base = base.transpose(TRANSPOSE.FLIP_TOP_BOTTOM)
+            self._base_cache[sq.id] = (bkey, base)
+        # 2) rotation (fonds transparents, centre conservé)
+        out = base.rotate(-rot, RES.BILINEAR if fast else RES.BICUBIC, expand=True) if rot else base
+        photo = ImageTk.PhotoImage(out)
         self._photo_cache[sq.id] = (key, photo)
         return photo
 
@@ -611,7 +680,6 @@ class NodeCanvas(tk.Canvas):
         self.bg_photo = None
         self.bg_x = self.bg_y = 0
         self.bg_width = self.bg_height = 0
-        self.bg_rotation = 0
         if not filepath or not PIL_AVAILABLE:
             return
         try:
@@ -635,8 +703,6 @@ class NodeCanvas(tk.Canvas):
         img = self.bg_original
         if size != img.size:
             img = img.resize(size, Image.NEAREST if fast else Image.LANCZOS)
-        if getattr(self, "bg_rotation", 0):
-            img = img.rotate(-self.bg_rotation, expand=True, resample=Image.BICUBIC)
         self.bg_photo = ImageTk.PhotoImage(img)
         self.create_image(self.bg_x * z, self.bg_y * z, image=self.bg_photo, anchor="nw", tags="background")
         self.tag_lower("background")
@@ -681,12 +747,25 @@ class NodeCanvas(tk.Canvas):
                 self._update_links()
             return
 
+        sel = self.selected_square
+        if sel is not None and not sel.locked and self._visible(sel) and self._over_rot_handle(sel, x, y):
+            cx, cy = sel.center()
+            self._mode = "rotate"
+            self._rot_ref = (math.degrees(math.atan2(y - cy, x - cx)), getattr(sel, "rotation", 0.0))
+            self._cancel_anim()
+            return
+
         sq = self._square_at(x, y)
         if sq:
             self._select(sq=sq)
             if not sq.locked:
-                if event.state & 0x0008 and self._in_handle(x, y, sq.x + sq.size, sq.y + sq.size):
-                    self._mode, self._anchor_pt, self._orig = "resize", (x, y), sq.size
+                if self._over_resize(sq, x, y):
+                    rot = getattr(sq, "rotation", 0.0)
+                    cx, cy = sq.center()
+                    ox, oy = _rot(-sq.size / 2, -sq.size / 2, rot)
+                    self._corner0 = (cx + ox, cy + oy)           # coin haut-gauche : reste fixe
+                    self._anchor_pt = _rot(x - self._corner0[0], y - self._corner0[1], -rot)
+                    self._mode, self._orig = "resize", sq.size
                 else:
                     self._mode, self._last = "move", (x, y)
             return
@@ -725,11 +804,26 @@ class NodeCanvas(tk.Canvas):
             self._update_links()
         elif mode == "resize":
             sq = self.selected_square
-            new = max(30, self._orig + max(x - self._anchor_pt[0], y - self._anchor_pt[1]))
+            rot = getattr(sq, "rotation", 0.0)
+            p0 = self._corner0
+            ddx, ddy = _rot(x - p0[0], y - p0[1], -rot)
+            new = max(30, self._orig + max(ddx - self._anchor_pt[0], ddy - self._anchor_pt[1]))
             if new != sq.size:
+                ox, oy = _rot(new / 2, new / 2, rot)       # le coin haut-gauche ne bouge pas à l'écran
                 sq.size = new
+                sq.x = p0[0] + ox - new / 2
+                sq.y = p0[1] + oy - new / 2
                 self._draw_square(sq, fast=True)
                 self._update_links()
+        elif mode == "rotate":
+            sq = self.selected_square
+            cx, cy = sq.center()
+            a = math.degrees(math.atan2(y - cy, x - cx))
+            r = self._snap_angle(self._rot_ref[1] + (a - self._rot_ref[0]),
+                                 bool(getattr(event, "state", 0) & 0x0001))   # Maj = pas de 15°
+            sq.rotation = r % 360
+            self._draw_square(sq, fast=True)
+            self._notice(f"{round(sq.rotation) % 360}°")
         elif mode == "folder":
             fd = self.selected_folder
             fd.x += dx
@@ -776,6 +870,8 @@ class NodeCanvas(tk.Canvas):
         elif mode == "resize":
             self._draw_square(self.selected_square)
             self._assign_folder(self.selected_square)
+        elif mode == "rotate":
+            self._draw_square(self.selected_square)      # rendu haute qualité
         elif mode == "bg_resize":
             self._redraw_background()
 
@@ -829,6 +925,23 @@ class NodeCanvas(tk.Canvas):
             self._update_links()
         if self.connecting_from is not None and self._mode is None:
             self._update_connect_line(x, y)
+        if self._mode is None:
+            self._update_cursor(x, y)
+
+    def _update_cursor(self, x, y):
+        cur = ""
+        sel = self.selected_square
+        if sel is not None and not sel.locked and self._visible(sel) and self.connecting_from is None:
+            if self._over_rot_handle(sel, x, y):
+                cur = "exchange"
+            elif self._over_resize(sel, x, y):
+                cur = "bottom_right_corner"
+        if cur != self._cursor:
+            self._cursor = cur
+            try:
+                self.config(cursor=cur)
+            except tk.TclError:
+                self._cursor = ""
 
     def _on_leave(self, event):
         if self._mode != "connect" and (self.hovered_square or self.hovered_folder):
@@ -874,10 +987,12 @@ class NodeCanvas(tk.Canvas):
     # Actions (menu contextuel / raccourcis)
     # ------------------------------------------------------------------
     def _add_square_at_cursor(self):
-        self.add_square(self.context_menu_x, self.context_menu_y, size=self.square_size)
+        name = self._ask_name("Nouveau carré")
+        self.add_square(self.context_menu_x, self.context_menu_y, size=self.square_size, name=name or "")
 
     def _add_folder_at_cursor(self):
-        self.add_folder(self.context_menu_x, self.context_menu_y)
+        title = self._ask_name("Nouveau dossier", "Dossier")
+        self.add_folder(self.context_menu_x, self.context_menu_y, title=title or "Dossier")
 
     def _selected(self):
         return self.selected_square or self.selected_folder
@@ -906,6 +1021,77 @@ class NodeCanvas(tk.Canvas):
                 obj.title = name
                 self._draw_folder(obj)
 
+    @staticmethod
+    def _snap_angle(r, fine):
+        if fine:                                   # Maj : pas de 15°
+            return round(r / 15) * 15
+        n = round(r / 45) * 45                     # aimantation douce sur 0/45/90/...
+        return n if abs(r - n) <= 3 else r
+
+    def _cancel_anim(self):
+        if self._anim_job:
+            self.after_cancel(self._anim_job)
+            self._anim_job = None
+
+    def _editable_square(self):
+        sq = self.selected_square
+        if sq is None:
+            return None
+        if sq.locked:
+            self._notice("Élément verrouillé")
+            return None
+        return sq
+
+    def rotate_selected(self, delta):
+        """Pivote le carré sélectionné de `delta` degrés, avec une courte animation."""
+        sq = self._editable_square()
+        if sq is None:
+            return
+        self._cancel_anim()
+        start = getattr(sq, "rotation", 0.0)
+        frames = 8
+
+        def step(i):
+            t = i / frames
+            if i >= frames:
+                sq.rotation = (start + delta) % 360
+                self._anim_job = None
+                self._draw_square(sq)                         # dernière image en haute qualité
+                self._notice(f"{round(sq.rotation) % 360}°")
+                return
+            sq.rotation = (start + delta * (1 - (1 - t) ** 3)) % 360   # décélération douce
+            self._draw_square(sq, fast=True)
+            self._anim_job = self.after(14, lambda: step(i + 1))
+
+        step(1)
+
+    def flip_selected(self, horizontal=True):
+        """Miroir de l'image par rapport à l'ÉCRAN (même après une rotation)."""
+        sq = self._editable_square()
+        if sq is None:
+            return
+        if not sq.image_path:
+            self._notice("Le miroir ne s'applique qu'aux images")
+            return
+        self._cancel_anim()
+        if horizontal:
+            sq.flip_h = not getattr(sq, "flip_h", False)
+        else:
+            sq.flip_v = not getattr(sq, "flip_v", False)
+        # un miroir écran appliqué à un objet tourné inverse l'angle
+        sq.rotation = (-getattr(sq, "rotation", 0.0)) % 360
+        self._draw_square(sq)
+        self._notice("Miroir horizontal" if horizontal else "Miroir vertical")
+
+    def reset_transform(self):
+        sq = self._editable_square()
+        if sq is None:
+            return
+        self._cancel_anim()
+        sq.rotation, sq.flip_h, sq.flip_v = 0.0, False, False
+        self._draw_square(sq)
+        self._notice("Rotation / miroir réinitialisés")
+
     def _toggle_lock(self):
         sq = self.selected_square
         if sq:
@@ -924,6 +1110,7 @@ class NodeCanvas(tk.Canvas):
             self.links = [l for l in self.links if sq.id not in (l.source_id, l.target_id)]
             self._images.pop(sq.id, None)
             self._photo_cache.pop(sq.id, None)
+            self._base_cache.pop(sq.id, None)
             if self.hovered_square is sq:
                 self.hovered_square = None
         elif fd:
@@ -953,7 +1140,6 @@ class NodeCanvas(tk.Canvas):
             "width": round(self.bg_width),
             "height": round(self.bg_height),
             "locked": bool(getattr(self, "bg_locked", False)),
-            "rotation": round(getattr(self, "bg_rotation", 0)),
         }
 
     def set_default_square_size(self):
@@ -985,49 +1171,3 @@ class NodeCanvas(tk.Canvas):
             for ln in self.links:
                 ln.color = color
             self._update_links()
-
-    def _flip_image(self):
-        sq = self.selected_square
-        if not sq or not sq.image_path:
-            return
-        from dialogs import ask_string
-        value = ask_string(self.winfo_toplevel(), "Flip image", "0=aucun, 1=horizontal, 2=vertical, 3=les deux :", str(sq.flip))
-        if value is None:
-            return
-        try:
-            flip = int(value)
-        except (ValueError, OverflowError):
-            return
-        sq.flip = flip & 3
-        self._photo_cache.pop(sq.id, None)
-        self._draw_square(sq)
-
-    def _rotate_image(self):
-        sq = self.selected_square
-        if not sq or not sq.image_path:
-            return
-        from dialogs import ask_string
-        value = ask_string(self.winfo_toplevel(), "Rotation", "Angle en degrés :", str(sq.rotation))
-        if value is None:
-            return
-        try:
-            angle = float(value)
-        except (ValueError, OverflowError):
-            return
-        sq.rotation = angle % 360
-        self._photo_cache.pop(sq.id, None)
-        self._draw_square(sq)
-
-    def _rotate_background(self):
-        if not self.background_image:
-            return
-        from dialogs import ask_string
-        value = ask_string(self.winfo_toplevel(), "Rotation du fond", "Angle en degrés :", str(getattr(self, "bg_rotation", 0)))
-        if value is None:
-            return
-        try:
-            angle = float(value)
-        except (ValueError, OverflowError):
-            return
-        self.bg_rotation = angle % 360
-        self._redraw_background()
