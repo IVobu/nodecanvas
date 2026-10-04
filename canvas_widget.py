@@ -1038,7 +1038,8 @@ class NodeCanvas(tk.Canvas):
         self._select()
         if shift:                                 # Maj+clic sur le vide : zone de sélection
             self._mode = "marquee"
-            self._marquee = (event.x, event.y, event.x, event.y)
+            self._marquee = (x, y, x, y)          # coordonnées monde
+            self._update_marquee(x, y)
             return
         if self._bg_hit(x, y):
             if self.bg_blocks_clicks:
@@ -1059,7 +1060,7 @@ class NodeCanvas(tk.Canvas):
         dx, dy = x - self._last[0], y - self._last[1]
 
         if mode == "marquee":
-            self._update_marquee(event)
+            self._update_marquee(*self._pos(event))
             return
 
         if mode in ("move", "resize", "rotate", "folder", "folder_resize", "bg_move", "bg_resize"):
@@ -1149,8 +1150,8 @@ class NodeCanvas(tk.Canvas):
             if self._marquee:
                 x0, y0, x1, y1 = self._marquee
                 self._marquee = None
-                wx0, wx1 = sorted((self.canvasx(x0) / self.zoom, self.canvasx(x1) / self.zoom))
-                wy0, wy1 = sorted((self.canvasy(y0) / self.zoom, self.canvasy(y1) / self.zoom))
+                wx0, wx1 = sorted((x0, x1))       # déjà en coordonnées monde
+                wy0, wy1 = sorted((y0, y1))
                 inside = [s for s in self.squares
                           if (not s.locked or not self.ignore_locked)
                           and s.x < wx1 and s.x + s.size > wx0
@@ -1224,20 +1225,22 @@ class NodeCanvas(tk.Canvas):
         finally:
             menu.grab_release()
 
-    def _update_marquee(self, event):
-        """Rectangle de sélection : suit la souris sur chaque mouvement."""
+    def _update_marquee(self, wx, wy):
+        """Rectangle de sélection, en coordonnées monde : suit la souris
+        même si la vue est zoomée ou déplacée (panoramique)."""
         if not self._marquee:
             return
         x0, y0, _, _ = self._marquee
-        self._marquee = (x0, y0, event.x, event.y)
+        self._marquee = (x0, y0, wx, wy)
+        z = self.zoom
         self.delete("marquee")
-        self.create_rectangle(x0, y0, event.x, event.y, outline=SELECT_COLOR,
+        self.create_rectangle(x0 * z, y0 * z, wx * z, wy * z, outline=SELECT_COLOR,
                               dash=(4, 3), width=1, tags="marquee")
         self.tag_raise("marquee")
 
     def _on_motion(self, event):
         if self._mode == "marquee":
-            self._update_marquee(event)
+            self._update_marquee(*self._pos(event))
             return
         x, y = self._pos(event)
         self._mouse = (x, y)
