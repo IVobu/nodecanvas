@@ -8,6 +8,17 @@ def _clamp_opacity(value):
         return 1.0
 
 
+def crop_pixel_bounds(crop, width, height):
+    """Convert normalized crop bounds to pixel bounds without truncation drift."""
+    width, height = max(1, int(width)), max(1, int(height))
+    left, top, right, bottom = crop or (0.0, 0.0, 1.0, 1.0)
+    x0 = max(0, min(width - 1, round(left * width)))
+    y0 = max(0, min(height - 1, round(top * height)))
+    x1 = max(x0 + 1, min(width, round(right * width)))
+    y1 = max(y0 + 1, min(height, round(bottom * height)))
+    return x0, y0, x1, y1
+
+
 class Square:
     def __init__(self, x, y, size=60, color="#4A90D9", name="", folder_id=None, image_path=None,
                  locked=False, rotation=0.0, flip_h=False, flip_v=False, opacity=1.0,

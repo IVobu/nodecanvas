@@ -13,7 +13,7 @@ import time
 import uuid
 import tkinter as tk
 
-from models import Square, Link, Folder
+from models import Square, Link, Folder, crop_pixel_bounds
 
 try:
     from PIL import Image, ImageTk, ImageGrab
@@ -915,9 +915,7 @@ class NodeCanvas(tk.Canvas):
                 source = Image.open(self._resolve(sq.image_path))
                 source.load()
                 source = source.convert("RGBA")
-                left, top, right, bottom = crop or (0.0, 0.0, 1.0, 1.0)
-                bounds = (int(left * source.width), int(top * source.height),
-                          int(right * source.width), int(bottom * source.height))
+                bounds = crop_pixel_bounds(crop, source.width, source.height)
                 cropped = source.crop((bounds[0], bounds[1],
                                        max(bounds[0] + 1, bounds[2]),
                                        max(bounds[1] + 1, bounds[3])))
@@ -1109,9 +1107,7 @@ class NodeCanvas(tk.Canvas):
         if cached and cached[0] == key:
             return cached[1]
         if crop is not None:
-            left, top, right, bottom = crop
-            bounds = (int(left * img.width), int(top * img.height),
-                      int(right * img.width), int(bottom * img.height))
+            bounds = crop_pixel_bounds(crop, img.width, img.height)
             img = img.crop((bounds[0], bounds[1], max(bounds[0] + 1, bounds[2]),
                             max(bounds[1] + 1, bounds[3])))
         # 1) ajustement + miroir : mis en cache, donc la rotation ne refait que l'étape 2

@@ -44,6 +44,7 @@ import time
 
 from canvas_widget import (PIL_AVAILABLE, RES, TRANSPOSE, Image, ImageTk,
                            _load_settings, _save_settings)
+from models import crop_pixel_bounds
 
 MIN_OPACITY = 0.1          # 10 % : en dessous, le carré devient introuvable au clic
 MAX_STEP = 0.5
@@ -229,9 +230,7 @@ class OpacityFeature:
             return self._photos.get(sq.id)
         try:
             if crop is not None:
-                left, top, right, bottom = crop
-                bounds = (int(left * src.width), int(top * src.height),
-                          int(right * src.width), int(bottom * src.height))
+                bounds = crop_pixel_bounds(crop, src.width, src.height)
                 src = src.crop((bounds[0], bounds[1], max(bounds[0] + 1, bounds[2]),
                                 max(bounds[1] + 1, bounds[3])))
             scale = min(box / src.width, box / src.height)
