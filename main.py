@@ -19,6 +19,7 @@ class NodeCanvasApp:
         self.opacity = opacity.install(self.canvas)
 
         self._build_menu()
+        self._restore_last_session()
 
     def _build_menu(self):
         menubar = tk.Menu(self.root)
@@ -40,6 +41,12 @@ class NodeCanvasApp:
         edit_menu.add_command(label="Annuler (Ctrl+Z)", command=self.canvas.undo)
         edit_menu.add_command(label="Rétablir (Ctrl+Maj+Z)", command=self.canvas.redo)
         edit_menu.add_separator()
+        edit_menu.add_command(label="Changer la couleur de la sélection…",
+                              command=self.canvas._change_color)
+        edit_menu.add_command(label="Déconnecter la sélection (D)",
+                              command=self.canvas._disconnect_selected)
+        edit_menu.add_command(label="Recadrer l'image sélectionnée (C)",
+                              command=lambda: self.canvas._toggle_crop_mode(None))
         edit_menu.add_command(label="Copier les carrés (Ctrl+C)", command=self.canvas.copy_selected)
         edit_menu.add_command(label="Coller les carrés (Ctrl+Maj+V)", command=self.canvas.paste_squares)
         edit_menu.add_command(label="Tout sélectionner (Ctrl+A)", command=self.canvas.select_all_squares)
@@ -62,6 +69,8 @@ class NodeCanvasApp:
         settings_menu.add_command(label="Couleur des liens…", command=self.canvas.set_link_color)
         settings_menu.add_separator()
         settings_menu.add_command(label="Opacité : pas…", command=self.canvas.set_opacity_step)
+        settings_menu.add_command(label="Opacité des nouveaux carrés…",
+                                  command=self.canvas.set_default_square_opacity)
         settings_menu.add_command(label="Opacité de la sélection…", command=self.canvas.ask_opacity)
         settings_menu.add_command(label="Opacité de tous les carrés…", command=self.canvas.ask_opacity_all)
         settings_menu.add_command(label="Rétablir l'opacité de la sélection (100 %)",
@@ -100,17 +109,42 @@ class NodeCanvasApp:
         _save_settings(data)
         self._refresh_recent_menu()
 
+    def _load_project(self, filepath):
+        squares, links, folders, bg, settings = import_json(filepath)
+        self.canvas.load_data(squares, links, folders, bg)
+        if settings:
+            self.canvas.square_size = settings.get("square_size", 60)
+            self.canvas.link_width = settings.get("link_width", 3)
+            self.canvas.default_link_color = settings.get("link_color", "#888888")
+
+    def _restore_last_session(self):
+        recents = _load_settings().get("recent_files", [])
+        if not isinstance(recents, list) or not recents:
+            return
+        failures = []
+        for filepath in recents:
+            if not isinstance(filepath, str):
+                continue
+            if not os.path.isfile(filepath):
+                failures.append(filepath)
+                continue
+            try:
+                self._load_project(filepath)
+                self._add_recent(filepath)
+                if failures:
+                    self.canvas._notice("Dernier projet indisponible; projet récent précédent restauré")
+                return
+            except Exception as error:
+                failures.append((filepath, error))
+        if failures:
+            self.canvas._notice("Aucun projet récent valide; démarrage sur un canevas vide")
+
     def _load_recent(self, filepath):
         if not os.path.exists(filepath):
             messagebox.showerror("Erreur", f"Fichier introuvable : {filepath}")
             return
         try:
-            squares, links, folders, bg, settings = import_json(filepath)
-            self.canvas.load_data(squares, links, folders, bg)
-            if settings:
-                self.canvas.square_size = settings.get("square_size", 60)
-                self.canvas.link_width = settings.get("link_width", 3)
-                self.canvas.default_link_color = settings.get("link_color", "#888888")
+            self._load_project(filepath)
             self._add_recent(filepath)
             messagebox.showinfo("Import", "Import réussi !")
         except Exception as e:
@@ -135,12 +169,7 @@ class NodeCanvasApp:
         filepath = filedialog.askopenfilename(filetypes=[("JSON files", "*.json")])
         if filepath:
             try:
-                squares, links, folders, bg, settings = import_json(filepath)
-                self.canvas.load_data(squares, links, folders, bg)
-                if settings:
-                    self.canvas.square_size = settings.get("square_size", 60)
-                    self.canvas.link_width = settings.get("link_width", 3)
-                    self.canvas.default_link_color = settings.get("link_color", "#888888")
+                self._load_project(filepath)
                 self._add_recent(filepath)
                 messagebox.showinfo("Import", "Import réussi !")
             except Exception as e:

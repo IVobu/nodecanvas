@@ -10,7 +10,8 @@ def _clamp_opacity(value):
 
 class Square:
     def __init__(self, x, y, size=60, color="#4A90D9", name="", folder_id=None, image_path=None,
-                 locked=False, rotation=0.0, flip_h=False, flip_v=False, opacity=1.0):
+                 locked=False, rotation=0.0, flip_h=False, flip_v=False, opacity=1.0,
+                 image_crop=None):
         self.id = str(uuid.uuid4())[:8]
         self.x = x
         self.y = y
@@ -24,6 +25,21 @@ class Square:
         self.flip_h = flip_h          # miroir de l'image (dans son propre repère)
         self.flip_v = flip_v
         self.opacity = _clamp_opacity(opacity)    # 1.0 = opaque (voir opacity.py)
+        self.image_crop = self._normalize_image_crop(image_crop)
+
+    @staticmethod
+    def _normalize_image_crop(crop):
+        if crop is None:
+            return None
+        try:
+            left, top, right, bottom = (max(0.0, min(1.0, float(v))) for v in crop)
+        except (TypeError, ValueError):
+            return None
+        if right - left < 0.01 or bottom - top < 0.01:
+            return None
+        if (left, top, right, bottom) == (0.0, 0.0, 1.0, 1.0):
+            return None
+        return left, top, right, bottom
 
     def contains(self, px, py):
         return self.x <= px <= self.x + self.size and self.y <= py <= self.y + self.size
@@ -48,6 +64,8 @@ class Square:
         }
         if self.opacity < 0.999:      # absent quand le carré est opaque : JSON allégé
             data["opacity"] = round(self.opacity, 3)
+        if self.image_crop is not None:
+            data["image_crop"] = list(self.image_crop)
         return data
 
     @classmethod
@@ -56,7 +74,7 @@ class Square:
                  data.get("name", ""), data.get("folder_id"), data.get("image_path"),
                  data.get("locked", False), data.get("rotation", 0.0),
                  data.get("flip_h", False), data.get("flip_v", False),
-                 data.get("opacity", 1.0))
+                 data.get("opacity", 1.0), data.get("image_crop"))
         sq.id = data["id"]
         return sq
 

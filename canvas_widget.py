@@ -67,6 +67,10 @@ DEFAULT_SETTINGS = {
     "default_square_name2": "Bleu",
     "undo_depth": 50,
     "bg_blocks_clicks": True,
+    "default_square_opacity": 1.0,
+    "lock_square_colors": False,
+    "lock_square_positions": False,
+    "link_visibility": "hover",
 }
 
 
@@ -129,6 +133,10 @@ class NodeCanvas(tk.Canvas):
         self.default_square_color2 = _settings.get("default_square_color2", "#0000FF")
         self.default_square_name1 = _settings.get("default_square_name1", "Rouge")
         self.default_square_name2 = _settings.get("default_square_name2", "Bleu")
+        self.lock_square_colors = bool(_settings.get("lock_square_colors", False))
+        self.lock_square_positions = bool(_settings.get("lock_square_positions", False))
+        visibility = _settings.get("link_visibility", "hover")
+        self.link_visibility = visibility if visibility in ("hover", "selection", "all") else "hover"
         self.undo_depth = max(1, min(500, int(_settings.get("undo_depth", 50))))
         self.bg_blocks_clicks = bool(_settings.get("bg_blocks_clicks", True))
         self._undo_stack = []
@@ -137,6 +145,9 @@ class NodeCanvas(tk.Canvas):
         self._marquee = None
         self._grabbed = None         # objet dont la poignée est en cours de glissement
         self._snapshot_taken = False
+        self._crop_square = None
+        self._crop_preview = None
+        self._crop_drag = None
         self._pending_preset = None
         self._quick_held = []           # touches 1/2 maintenues (carré rapide au clic droit)
         self._quick_jobs = {}           # anti-répétition : libère après le relâchement
@@ -189,6 +200,8 @@ class NodeCanvas(tk.Canvas):
         m.add_command(label="Nouveau dossier", command=self._add_folder_at_cursor)
         m.add_separator()
         m.add_command(label="Changer couleur", command=self._change_color)
+        m.add_command(label="Recadrer l'image sélectionnée (C)",
+                      command=lambda: self._toggle_crop_mode(None))
         m.add_command(label="Renommer (F2)", command=self._rename)
         m.add_separator()
         m.add_command(label="Coller image (Ctrl+V)", command=self._paste_from_clipboard)
@@ -238,8 +251,13 @@ class NodeCanvas(tk.Canvas):
         self.bind("<Button-5>", self._on_wheel)
         self.bind("<Control-v>", lambda e: self._paste_from_clipboard())
         self.bind("<Delete>", lambda e: self._delete_selected())
+        self.bind("<KeyPress-c>", self._toggle_crop_mode)
+        self.bind("<KeyPress-C>", self._toggle_crop_mode)
+        self.bind("<Return>", self._commit_crop)
+        self.bind("<KeyPress-d>", lambda e: self._disconnect_selected())
+        self.bind("<KeyPress-D>", lambda e: self._disconnect_selected())
         self.bind("<F2>", lambda e: self._rename())
-        self.bind("<Escape>", lambda e: self._cancel_connect())
+        self.bind("<Escape>", self._escape_action)
         self.bind("<Control-Key-0>", lambda e: self.reset_zoom())
         for key in ("h", "H"):
             self.bind(f"<Key-{key}>", lambda e: self.flip_selected(True))
@@ -352,6 +370,28 @@ class NodeCanvas(tk.Canvas):
             self._ask_var = tk.BooleanVar(value=self.ask_name_on_create)
             vm.add_checkbutton(label="Demander le nom à la création",
                                variable=self._ask_var, command=self._on_ask_name_menu)
+            vm.add_separator()
+            self._lock_colors_var = tk.BooleanVar(value=self.lock_square_colors)
+            vm.add_checkbutton(label="Verrouiller la couleur des carrés",
+                               variable=self._lock_colors_var,
+                               command=self._on_lock_colors_menu)
+            self._lock_positions_var = tk.BooleanVar(value=self.lock_square_positions)
+            vm.add_checkbutton(label="Verrouiller la position des carrés",
+                               variable=self._lock_positions_var,
+                               command=self._on_lock_positions_menu)
+            vm.add_separator()
+            self._link_visibility_var = tk.StringVar(value=self.link_visibility)
+            links_menu = tk.Menu(vm, tearoff=0)
+            links_menu.add_radiobutton(label="Liens au survol",
+                                       variable=self._link_visibility_var, value="hover",
+                                       command=self._on_link_visibility_menu)
+            links_menu.add_radiobutton(label="Liens de la sélection / du dossier",
+                                       variable=self._link_visibility_var, value="selection",
+                                       command=self._on_link_visibility_menu)
+            links_menu.add_radiobutton(label="Tous les liens",
+                                       variable=self._link_visibility_var, value="all",
+                                       command=self._on_link_visibility_menu)
+            vm.add_cascade(label="Afficher les connexions", menu=links_menu)
             vm.add_separator()
             vm.add_command(label="Zoom avant", command=lambda: self._zoom_center(1.25))
             vm.add_command(label="Zoom arrière", command=lambda: self._zoom_center(0.8))
@@ -525,13 +565,13 @@ class NodeCanvas(tk.Canvas):
                 return obj, "folder_resize"
         return None
 
-    def _hit(self, x, y):
+    def _hit(self, x, y, skip_locked=True):
         """Objet le plus haut sous le point (même pile que l'affichage)."""
         for obj in reversed(self._stack()):
             if isinstance(obj, Square):
                 if not self._visible(obj):
                     continue
-                if self.ignore_locked and obj.locked:
+                if skip_locked and self.ignore_locked and obj.locked:
                     continue
                 if self._sq_contains(obj, x, y):
                     return obj
@@ -541,8 +581,8 @@ class NodeCanvas(tk.Canvas):
                     return obj
         return None
 
-    def _square_at(self, x, y):
-        obj = self._hit(x, y)
+    def _square_at(self, x, y, include_locked=False):
+        obj = self._hit(x, y, skip_locked=not include_locked)
         return obj if isinstance(obj, Square) else None
 
     def _folder_at(self, x, y):
@@ -570,9 +610,11 @@ class NodeCanvas(tk.Canvas):
     # ------------------------------------------------------------------
     # API publique
     # ------------------------------------------------------------------
-    def add_square(self, x, y, size=None, color="#4A90D9", name=""):
+    def add_square(self, x, y, size=None, color="#4A90D9", name="", opacity=None):
         self.push_undo()
-        sq = Square(x, y, size or self.square_size, color, name)
+        if opacity is None:
+            opacity = getattr(self, "default_square_opacity", 1.0)
+        sq = Square(x, y, size or self.square_size, color, name, opacity=opacity)
         self.squares.append(sq)
         self._draw_square(sq)
         return sq
@@ -591,10 +633,17 @@ class NodeCanvas(tk.Canvas):
         self.push_undo()
         ln = Link(source_id, target_id)
         self.links.append(ln)
+        source, target = self._find_square(source_id), self._find_square(target_id)
+        feature = getattr(self, "opacity", None)
+        changed = feature.increase_link_opacity((source, target)) if (
+            feature is not None and source is not None and target is not None) else 0
         self._update_links()
+        self._notice(f"Connexion créée; opacité augmentée pour {changed}/2 carrés")
         return ln
 
     def load_data(self, squares, links, folders, background_image):
+        if self._crop_square is not None:
+            self._cancel_crop()
         self.squares = squares
         self.links = links
         self.folders = folders
@@ -649,6 +698,23 @@ class NodeCanvas(tk.Canvas):
         self.ask_name_on_create = bool(self._ask_var.get())
         self.save_settings()
 
+    def _on_lock_colors_menu(self):
+        self.lock_square_colors = bool(self._lock_colors_var.get())
+        self.save_settings()
+        self._notice("Couleurs des carrés verrouillées" if self.lock_square_colors
+                     else "Couleurs des carrés déverrouillées")
+
+    def _on_lock_positions_menu(self):
+        self.lock_square_positions = bool(self._lock_positions_var.get())
+        self.save_settings()
+        self._notice("Positions des carrés verrouillées" if self.lock_square_positions
+                     else "Positions des carrés déverrouillées")
+
+    def _on_link_visibility_menu(self):
+        self.link_visibility = self._link_visibility_var.get()
+        self._update_links()
+        self.save_settings()
+
     def _on_ignore_menu(self):
         self.ignore_locked = bool(self._ignore_var.get())
         self._after_ignore_change()
@@ -697,6 +763,7 @@ class NodeCanvas(tk.Canvas):
         z = self.zoom
         tag = self._tag(sq)
         self.delete(tag)
+        self.delete(f"crop_{sq.id}")
         if not self._visible(sq):
             return
         rot = getattr(sq, "rotation", 0.0)
@@ -733,6 +800,161 @@ class NodeCanvas(tk.Canvas):
             self._restore_order(sq)
         if self.handles_on:
             self._draw_handles_for(sq)
+        if self._crop_square is sq:
+            self._draw_crop_handles(sq)
+
+    def _crop_points(self, sq, crop):
+        image = self._images.get(sq.id)
+        if image is None:
+            return []
+        box = max(sq.size * self.zoom - 4, 1)
+        scale = min(box / image.width, box / image.height)
+        width, height = image.width * scale / self.zoom, image.height * scale / self.zoom
+        cx, cy = sq.center()
+        left, top = cx - width / 2, cy - height / 2
+        l, t, r, b = crop
+        points = []
+        for u, v in ((l, t), (r, t), (r, b), (l, b)):
+            if getattr(sq, "flip_h", False):
+                u = 1 - u
+            if getattr(sq, "flip_v", False):
+                v = 1 - v
+            dx, dy = _rot((u - 0.5) * width, (v - 0.5) * height,
+                          getattr(sq, "rotation", 0.0))
+            points.append((cx + dx, cy + dy))
+        return points
+
+    def _draw_crop_handles(self, sq):
+        tag = f"crop_{sq.id}"
+        self.delete(tag)
+        crop = self._crop_preview
+        points = self._crop_points(sq, crop) if crop else []
+        if not points:
+            return
+        z = self.zoom
+        coords = [value for point in points for value in (point[0] * z, point[1] * z)]
+        self.create_polygon(*coords, fill="", outline="#00E5FF", width=2,
+                            dash=(5, 3), tags=(tag, "crop_ui"))
+        half = 5
+        for index, (x, y) in enumerate(points):
+            self.create_rectangle(x * z - half, y * z - half,
+                                  x * z + half, y * z + half,
+                                  fill="#00E5FF", outline="#FFFFFF",
+                                  tags=(tag, "crop_ui", f"crop_handle_{index}"))
+        self.tag_raise(tag)
+
+    def _crop_handle_at(self, sq, x, y):
+        points = self._crop_points(sq, self._crop_preview)
+        radius = HANDLE / self.zoom
+        for index, (hx, hy) in enumerate(points):
+            if math.hypot(x - hx, y - hy) <= radius:
+                return index
+        return None
+
+    def _toggle_crop_mode(self, event):
+        if getattr(event, "state", 0) & 0x0004:
+            return
+        if self._crop_square is not None:
+            self._cancel_crop()
+            return "break"
+        sq = self.selected_square
+        if sq is None or not sq.image_path or self._images.get(sq.id) is None:
+            self._notice("Sélectionnez un carré-image pour le recadrer")
+            return "break"
+        if sq.locked:
+            self._notice("Élément verrouillé")
+            return "break"
+        self._crop_square = sq
+        self._crop_preview = getattr(sq, "image_crop", None) or (0.0, 0.0, 1.0, 1.0)
+        self._crop_drag = None
+        self._draw_square(sq)
+        self._notice("Recadrage : tirez une poignée, Entrée applique, Échap annule")
+        return "break"
+
+    def _crop_point_to_image(self, sq, x, y):
+        image = self._images[sq.id]
+        box = max(sq.size * self.zoom - 4, 1)
+        scale = min(box / image.width, box / image.height)
+        width, height = image.width * scale / self.zoom, image.height * scale / self.zoom
+        cx, cy = sq.center()
+        lx, ly = _rot(x - cx, y - cy, -getattr(sq, "rotation", 0.0))
+        u = max(0.0, min(1.0, (lx + width / 2) / width))
+        v = max(0.0, min(1.0, (ly + height / 2) / height))
+        if getattr(sq, "flip_h", False):
+            u = 1 - u
+        if getattr(sq, "flip_v", False):
+            v = 1 - v
+        return u, v
+
+    def _update_crop_preview(self, x, y):
+        sq = self._crop_square
+        if sq is None or self._crop_drag is None:
+            return
+        u, v = self._crop_point_to_image(sq, x, y)
+        left, top, right, bottom = self._crop_preview
+        minimum = 0.02
+        if self._crop_drag in (0, 3):
+            left = min(u, right - minimum)
+        else:
+            right = max(u, left + minimum)
+        if self._crop_drag in (0, 1):
+            top = min(v, bottom - minimum)
+        else:
+            bottom = max(v, top + minimum)
+        self._crop_preview = (max(0.0, left), max(0.0, top),
+                              min(1.0, right), min(1.0, bottom))
+        self._draw_square(sq, fast=True)
+
+    def _commit_crop(self, event=None):
+        sq = self._crop_square
+        if sq is None:
+            return
+        crop = Square._normalize_image_crop(self._crop_preview)
+        if crop != getattr(sq, "image_crop", None):
+            try:
+                source = Image.open(self._resolve(sq.image_path))
+                source.load()
+                source = source.convert("RGBA")
+                left, top, right, bottom = crop or (0.0, 0.0, 1.0, 1.0)
+                bounds = (int(left * source.width), int(top * source.height),
+                          int(right * source.width), int(bottom * source.height))
+                cropped = source.crop((bounds[0], bounds[1],
+                                       max(bounds[0] + 1, bounds[2]),
+                                       max(bounds[1] + 1, bounds[3])))
+                os.makedirs(ASSETS_DIR, exist_ok=True)
+                filename = f"crop_{uuid.uuid4().hex[:12]}.png"
+                output_path = os.path.join(ASSETS_DIR, filename)
+                cropped.save(output_path, format="PNG")
+            except (OSError, ValueError) as error:
+                self._notice(f"Impossible d'appliquer le recadrage : {error}")
+                return
+            self.push_undo()
+            sq.image_path = os.path.relpath(output_path, os.path.dirname(ASSETS_DIR))
+            sq.image_crop = None
+            self._photo_cache.pop(sq.id, None)
+            self._base_cache.pop(sq.id, None)
+            self._images.pop(sq.id, None)
+            self._crop_square = self._crop_preview = self._crop_drag = None
+            self._draw_square(sq)
+            self._notice("Recadrage appliqué (Ctrl+Z pour annuler)")
+        else:
+            self._cancel_crop()
+        return "break"
+
+    def _cancel_crop(self):
+        sq = self._crop_square
+        if sq is None:
+            return
+        self._crop_square = self._crop_preview = self._crop_drag = None
+        self._draw_square(sq)
+        self._notice("Recadrage annulé")
+
+    def _escape_action(self, event=None):
+        if self._crop_square is not None:
+            self._cancel_crop()
+        else:
+            self._cancel_connect()
+        return "break"
 
     def _restore_order(self, obj):
         """Un objet redessiné reprend sa place dans la pile (il ne saute plus devant)."""
@@ -807,31 +1029,48 @@ class NodeCanvas(tk.Canvas):
             self._draw_handles_for(fd)
 
     def _update_links(self):
-        """Liens du carré survolé, ou de tout le contenu d'un dossier fermé survolé."""
+        """Affiche les liens au survol, sur la sélection, ou globalement."""
         self.delete("link")
         focus = set()
-        h = self.hovered_square
-        if h is not None and self._visible(h):
-            focus = {h.id}
-        elif self.hovered_folder is not None and self.hovered_folder.collapsed:
-            focus = {s.id for s in self._members(self.hovered_folder)}
-        if not focus:
-            return
+        visibility = getattr(self, "link_visibility", "hover")
+        if visibility == "selection":
+            focus = {s.id for s in self.squares if self._is_selected(s)}
+            if not focus and self.selected_folder is not None:
+                focus = {s.id for s in self._members(self.selected_folder)}
+        elif visibility == "hover":
+            h = self.hovered_square
+            if h is not None and self._visible(h):
+                focus = {h.id}
+            elif self.hovered_folder is not None and self.hovered_folder.collapsed:
+                focus = {s.id for s in self._members(self.hovered_folder)}
+            if not focus:
+                return
         z = self.zoom
         for ln in self.links:
-            if ln.source_id not in focus and ln.target_id not in focus:
+            if visibility != "all" and ln.source_id not in focus and ln.target_id not in focus:
                 continue
             src, tgt = self._find_square(ln.source_id), self._find_square(ln.target_id)
             if not src or not tgt:
                 continue
-            if src.folder_id and src.folder_id == tgt.folder_id and not self._visible(src):
+            if (src.folder_id and src.folder_id == tgt.folder_id and not self._visible(src)
+                    and visibility == "hover"):
                 continue   # lien interne à un dossier fermé
             width = max(MIN_LINK_WIDTH, min(MAX_LINK_WIDTH,
                                             getattr(ln, "width", None) or self.link_width))
             x1, y1 = self._anchor(src)
             x2, y2 = self._anchor(tgt)
-            self.create_line(x1 * z, y1 * z, x2 * z, y2 * z, fill=ln.color,
-                             width=width, tags="link")
+            if (src.folder_id and src.folder_id == tgt.folder_id
+                    and not self._visible(src) and (x1, y1) == (x2, y2)):
+                radius = min(9, ICON_W * z / 4)
+                self.create_line(x1 * z, y1 * z,
+                                 (x1 + radius) * z, (y1 - radius) * z,
+                                 (x1 + radius * 2) * z, y1 * z,
+                                 (x1 + radius) * z, (y1 + radius) * z,
+                                 x1 * z, y1 * z, fill=ln.color, width=width,
+                                 smooth=True, tags="link")
+            else:
+                self.create_line(x1 * z, y1 * z, x2 * z, y2 * z, fill=ln.color,
+                                 width=width, tags="link")
         self._place_links()
 
     # ------------------------------------------------------------------
@@ -860,15 +1099,23 @@ class NodeCanvas(tk.Canvas):
         img = self._images[sq.id]
         if img is None:
             return None
+        crop = (None if self._crop_square is sq
+                else getattr(sq, "image_crop", None))
         rot = getattr(sq, "rotation", 0.0) % 360
         fh, fv = getattr(sq, "flip_h", False), getattr(sq, "flip_v", False)
         box = max(int(sq.size * self.zoom) - 4, 1)
-        key = (box, fast, round(rot, 2), fh, fv)
+        key = (box, fast, round(rot, 2), fh, fv, crop)
         cached = self._photo_cache.get(sq.id)
         if cached and cached[0] == key:
             return cached[1]
+        if crop is not None:
+            left, top, right, bottom = crop
+            bounds = (int(left * img.width), int(top * img.height),
+                      int(right * img.width), int(bottom * img.height))
+            img = img.crop((bounds[0], bounds[1], max(bounds[0] + 1, bounds[2]),
+                            max(bounds[1] + 1, bounds[3])))
         # 1) ajustement + miroir : mis en cache, donc la rotation ne refait que l'étape 2
-        bkey = (box, fast, fh, fv)
+        bkey = (box, fast, fh, fv, crop)
         bc = self._base_cache.get(sq.id)
         if bc and bc[0] == bkey:
             base = bc[1]
@@ -892,7 +1139,8 @@ class NodeCanvas(tk.Canvas):
         if img is None:
             return None
         sq = Square(x - size / 2, y - size / 2, size, "#3A3A3A",
-                    os.path.basename(filepath), image_path=filepath)
+                    os.path.basename(filepath), image_path=filepath,
+                    opacity=getattr(self, "default_square_opacity", 1.0))
         self._images[sq.id] = img
         self.squares.append(sq)
         self._draw_square(sq)
@@ -1056,6 +1304,12 @@ class NodeCanvas(tk.Canvas):
         x, y = self._pos(event)
         self._mode = None
 
+        if self._crop_square is not None:
+            self._crop_drag = self._crop_handle_at(self._crop_square, x, y)
+            if self._crop_drag is not None:
+                self._mode = "crop"
+            return "break"
+
         # connexion en attente (double-clic sur un carré) : le clic suivant choisit la cible
         if self.connecting_from is not None:
             src = self.connecting_from
@@ -1102,8 +1356,10 @@ class NodeCanvas(tk.Canvas):
                 self._deselect_square(sq)
                 return
             self._select(sq=sq, add=shift)
-            if not sq.locked:
+            if not sq.locked and not self.lock_square_positions:
                 self._mode, self._last = "move", (x, y)
+            elif self.lock_square_positions and not sq.locked:
+                self._notice("Positions des carrés verrouillées")
             return
 
         fd = self._folder_at(x, y)
@@ -1111,24 +1367,28 @@ class NodeCanvas(tk.Canvas):
             self._select(fd=fd)
             if fd.collapsed or y <= fd.y + HEADER_H:
                 self._mode, self._last = "folder", (x, y)
+            elif shift:
+                self._mode = "marquee"
+                self._marquee = (x, y, x, y)
+                self._update_marquee(x, y)
             return
 
         self._select()
-        if shift:                                 # Maj+clic sur le vide : zone de sélection
+        if shift:
             self._mode = "marquee"
-            self._marquee = (x, y, x, y)          # coordonnées monde
+            self._marquee = (x, y, x, y)
             self._update_marquee(x, y)
             return
-        if self._bg_hit(x, y):
-            if self.bg_locked or self.bg_blocks_clicks:
-                self._notice("Fond verrouillé : inaltérable" if self.bg_locked
-                            else "Fond non cliquable")
-                return
+        if self._bg_hit(x, y) and not (self.bg_locked or self.bg_blocks_clicks):
             if self.handles_on and self._in_handle(x, y, self.bg_x + self.bg_width, self.bg_y + self.bg_height):
                 self._mode, self._anchor_pt = "bg_resize", (x, y)
                 self._orig = (self.bg_width, self.bg_height)
             else:
                 self._mode, self._last = "bg_move", (x, y)
+            return
+        self._mode = "marquee"
+        self._marquee = (x, y, x, y)
+        self._update_marquee(x, y)
 
     def _on_drag(self, event):
         mode = self._mode
@@ -1141,11 +1401,16 @@ class NodeCanvas(tk.Canvas):
         if mode == "marquee":
             self._update_marquee(*self._pos(event))
             return
+        if mode == "crop":
+            self._update_crop_preview(x, y)
+            return
 
         if mode in ("move", "resize", "rotate", "folder", "folder_resize", "bg_move", "bg_resize"):
             self._take_snapshot()
 
         if mode == "move":
+            if self.lock_square_positions:
+                return
             for sq in self._movable_squares():
                 sq.x += dx
                 sq.y += dy
@@ -1196,11 +1461,12 @@ class NodeCanvas(tk.Canvas):
             fd.x += dx
             fd.y += dy
             self.move(self._tag(fd), dx * z, dy * z)
-            for s in self._members(fd):
-                s.x += dx
-                s.y += dy
-                if not fd.collapsed:
-                    self.move(self._tag(s), dx * z, dy * z)
+            if not self.lock_square_positions:
+                for s in self._members(fd):
+                    s.x += dx
+                    s.y += dy
+                    if not fd.collapsed:
+                        self.move(self._tag(s), dx * z, dy * z)
             self._last = (x, y)
             self._update_links()
         elif mode == "folder_resize":
@@ -1231,6 +1497,10 @@ class NodeCanvas(tk.Canvas):
         self._snapshot_taken = False
         self._grabbed = None
 
+        if mode == "crop":
+            self._crop_drag = None
+            return
+
         if mode == "marquee":
             self.delete("marquee")
             if self._marquee:
@@ -1256,8 +1526,9 @@ class NodeCanvas(tk.Canvas):
                 self._update_links()
             # sinon : on reste en attente d'un clic sur le second carré
         elif mode == "move":
-            for sq in self._movable_squares():
-                self._assign_folder(sq)
+            if not self.lock_square_positions:
+                for sq in self._movable_squares():
+                    self._assign_folder(sq)
         elif mode == "resize":
             self._draw_square(self.selected_square)
             self._assign_folder(self.selected_square)
@@ -1297,7 +1568,7 @@ class NodeCanvas(tk.Canvas):
             self._create_square(x, y, color, name)
             return
         self.context_menu_x, self.context_menu_y = x, y
-        sq = self._square_at(x, y)
+        sq = self._square_at(x, y, include_locked=True)
         if sq:
             self._select(sq=sq)
             menu = self.context_menu
@@ -1458,6 +1729,9 @@ class NodeCanvas(tk.Canvas):
         self._redo_stack.clear()
 
     def undo(self):
+        if self._crop_square is not None:
+            self._cancel_crop()
+            return
         if not self._undo_stack:
             self._notice("Rien à annuler")
             return
@@ -1466,6 +1740,9 @@ class NodeCanvas(tk.Canvas):
         self._notice("Annulé")
 
     def redo(self):
+        if self._crop_square is not None:
+            self._cancel_crop()
+            return
         if not self._redo_stack:
             self._notice("Rien à rétablir")
             return
@@ -1520,33 +1797,42 @@ class NodeCanvas(tk.Canvas):
         targets = [s for s in self.squares if self._is_selected(s)]
         obj = targets[0] if targets else self._selected()
         if not obj:
+            self._notice("Aucun élément sélectionné")
+            return
+        if targets and self.lock_square_colors:
+            self._notice("Couleurs des carrés verrouillées")
             return
         from dialogs import ask_color
         color = ask_color(self.winfo_toplevel(), obj.color)
-        if color:
-            self.push_undo()
-            if targets:
-                for sq in targets:
-                    sq.color = color
-                    self._draw_square(sq)
-            else:
-                obj.color = color
-                (self._draw_square if isinstance(obj, Square) else self._draw_folder)(obj)
+        if not color:
+            return
+        self.push_undo()
+        if targets:
+            for sq in targets:
+                sq.color = color
+                self._draw_square(sq)
+            self._notice(f"Couleur : {color} ({len(targets)} carré(s))")
+        else:
+            obj.color = color
+            (self._draw_square if isinstance(obj, Square) else self._draw_folder)(obj)
+            self._notice(f"Couleur : {color}")
 
     def _rename(self):
         obj = self._selected()
         if not obj:
+            self._notice("Aucun élément sélectionné")
             return
         is_sq = isinstance(obj, Square)
         name = self._ask_name("Renommer", obj.name if is_sq else obj.title)
-        if name:
-            self.push_undo()
-            if is_sq:
-                obj.name = name
-                self._draw_square(obj)
-            else:
-                obj.title = name
-                self._draw_folder(obj)
+        if not name:
+            return
+        self.push_undo()
+        if is_sq:
+            obj.name = name
+            self._draw_square(obj)
+        else:
+            obj.title = name
+            self._draw_folder(obj)
 
     @staticmethod
     def _snap_angle(r, fine):
@@ -1628,6 +1914,7 @@ class NodeCanvas(tk.Canvas):
     def _toggle_lock(self):
         squares = [s for s in self.squares if self._is_selected(s)]
         if not squares:
+            self._notice("Aucun élément sélectionné")
             return
         self.push_undo()
         lock = not squares[0].locked
@@ -1635,7 +1922,8 @@ class NodeCanvas(tk.Canvas):
             sq.locked = lock
             self._draw_square(sq)
         if self.ignore_locked and lock:
-            self._select()
+            self._select()          # le clic droit le retrouve malgré tout (déverrouillage)
+        self._notice("Éléments verrouillés" if lock else "Éléments déverrouillés")
 
     def _delete_selected(self):
         fd = self.selected_folder
@@ -1643,13 +1931,14 @@ class NodeCanvas(tk.Canvas):
         if squares:
             self.push_undo()
             ids = {s.id for s in squares}
+            removed_links = [ln for ln in self.links
+                             if ln.source_id in ids or ln.target_id in ids]
+            self._remove_links(removed_links)
             if self.connecting_from in squares:
                 self._cancel_connect()
             for sq in squares:
                 self.delete(self._tag(sq))
             self.squares = [s for s in self.squares if s.id not in ids]
-            self.links = [l for l in self.links
-                          if l.source_id not in ids and l.target_id not in ids]
             for sq in squares:
                 self._images.pop(sq.id, None)
                 self._photo_cache.pop(sq.id, None)
@@ -1673,6 +1962,45 @@ class NodeCanvas(tk.Canvas):
         else:
             return
         self._update_links()
+
+    def _disconnect_selected(self):
+        targets = [s for s in self.squares if self._is_selected(s)]
+        if not targets:
+            self._notice("Aucun carré sélectionné")
+            return
+        target_ids = {sq.id for sq in targets}
+        removed_links = [ln for ln in self.links
+                         if ln.source_id in target_ids or ln.target_id in target_ids]
+        if not removed_links:
+            self._notice("Aucune connexion à supprimer")
+            return
+        self.push_undo()
+        removed = self._remove_links(removed_links)
+        self._notice(f"{removed} connexion(s) supprimée(s)")
+
+    def remove_link(self, link):
+        """Supprime un seul lien, avec l'opacité associée et une étape d'annulation."""
+        if link not in self.links:
+            return False
+        self.push_undo()
+        self._remove_links([link])
+        self._notice("Connexion supprimée")
+        return True
+
+    def _remove_links(self, links):
+        removed_ids = {id(link) for link in links}
+        removed = [link for link in self.links if id(link) in removed_ids]
+        if not removed:
+            return 0
+        endpoints = [self._find_square(square_id)
+                     for link in removed
+                     for square_id in (link.source_id, link.target_id)]
+        feature = getattr(self, "opacity", None)
+        if feature is not None:
+            feature.decrease_link_opacity(endpoints)
+        self.links = [link for link in self.links if id(link) not in removed_ids]
+        self._update_links()
+        return len(removed)
 
     def toggle_background_lock(self):
         if not self.background_image:
@@ -1702,9 +2030,8 @@ class NodeCanvas(tk.Canvas):
                                    parent=self.winfo_toplevel()):
             return
         self.push_undo()
-        self.links = []
-        self._update_links()
-        self._notice("Tous les liens ont été supprimés")
+        removed = self._remove_links(self.links)
+        self._notice(f"{removed} lien(s) supprimé(s); opacité des extrémités réduite")
 
     def set_bg_blocks_clicks(self, value):
         self.bg_blocks_clicks = bool(value)
@@ -1741,6 +2068,9 @@ class NodeCanvas(tk.Canvas):
             "default_square_color2": self.default_square_color2,
             "default_square_name1": self.default_square_name1,
             "default_square_name2": self.default_square_name2,
+            "lock_square_colors": bool(self.lock_square_colors),
+            "lock_square_positions": bool(self.lock_square_positions),
+            "link_visibility": self.link_visibility,
         })
         _save_settings(data)
 

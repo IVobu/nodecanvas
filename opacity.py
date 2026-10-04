@@ -70,6 +70,8 @@ class OpacityFeature:
     def __init__(self, canvas):
         self.canvas = canvas
         self.step = self._load_step()
+        self.default_opacity = self._load_default_opacity()
+        canvas.default_square_opacity = self.default_opacity
         self._colors = {}          # (couleur, opacité, fond) -> couleur mélangée
         self._backdrops = {}       # id carré -> couleur moyenne du fond sous le carré
         self._photos = {}          # id carré -> PhotoImage composé (référence Tk vivante)
@@ -110,8 +112,12 @@ class OpacityFeature:
                 self._fade_photo(sq, item, opacity, fast, backdrop)
             elif kind in ("polygon", "rectangle"):
                 fill = c.itemcget(item, "fill")
+                outline = c.itemcget(item, "outline")
                 if fill:
-                    c.itemconfigure(item, fill=self._blend(fill, opacity, backdrop))
+                    fill = self._blend(fill, opacity, backdrop)
+                if outline:
+                    outline = self._blend(outline, opacity, backdrop)
+                c.itemconfigure(item, fill=fill, outline=outline)
             elif kind == "text":
                 c.itemconfigure(item, fill=self._blend(TEXT_COLOR, opacity, backdrop))
 
@@ -153,8 +159,9 @@ class OpacityFeature:
     def _backdrop(self, sq):
         """Couleur moyenne du fond sous le carré (canvas ou image de fond)."""
         cached = self._backdrops.get(sq.id)
-        if cached:
-            return cached
+        position = (sq.x, sq.y, sq.size)
+        if cached and cached[:3] == position:
+            return cached[3]
         c = self.canvas
         base = self._to_rgb(c.cget("bg")) or (45, 45, 45)
         color = base
@@ -175,7 +182,7 @@ class OpacityFeature:
                             rs, gs, bs, count = rs + sample[0], gs + sample[1], bs + sample[2], count + 1
                 if count:
                     color = (rs // count, gs // count, bs // count)
-        self._backdrops[sq.id] = color
+        self._backdrops[sq.id] = position + (color,)
         return color
 
     @staticmethod
@@ -216,10 +223,17 @@ class OpacityFeature:
         box = max(int(sq.size * c.zoom) - 4, 1)
         rot = getattr(sq, "rotation", 0.0) % 360
         fh, fv = getattr(sq, "flip_h", False), getattr(sq, "flip_v", False)
-        key = (box, fast, round(rot, 2), fh, fv, opacity, backdrop)
+        crop = None if getattr(c, "_crop_square", None) is sq else getattr(sq, "image_crop", None)
+        key = (box, fast, round(rot, 2), fh, fv, opacity, backdrop, crop)
         if self._photo_keys.get(sq.id) == key:
             return self._photos.get(sq.id)
         try:
+            if crop is not None:
+                left, top, right, bottom = crop
+                bounds = (int(left * src.width), int(top * src.height),
+                          int(right * src.width), int(bottom * src.height))
+                src = src.crop((bounds[0], bounds[1], max(bounds[0] + 1, bounds[2]),
+                                max(bounds[1] + 1, bounds[3])))
             scale = min(box / src.width, box / src.height)
             size = (max(int(src.width * scale), 1), max(int(src.height * scale), 1))
             base = src.resize(size, RES.BILINEAR if fast else RES.LANCZOS)
@@ -301,6 +315,25 @@ class OpacityFeature:
             sq.opacity = _clamp(opacity)
         self._commit(targets, scope)
 
+    def increase_link_opacity(self, squares):
+        return self.adjust_link_opacity(squares, 1)
+
+    def decrease_link_opacity(self, squares):
+        return self.adjust_link_opacity(squares, -1)
+
+    def adjust_link_opacity(self, squares, direction):
+        updated = []
+        for sq in squares:
+            if sq is None:
+                continue
+            current = getattr(sq, "opacity", 1.0)
+            sq.opacity = _clamp(current + direction * self.step)
+            if sq.opacity != current and sq not in updated:
+                updated.append(sq)
+        for sq in updated:
+            self.canvas._draw_square(sq)
+        return len(updated)
+
     def reset(self, scope="selection"):
         self.set_opacity(1.0, scope)
 
@@ -330,6 +363,21 @@ class OpacityFeature:
         data["opacity_step"] = self.step
         _save_settings(data)
         self.canvas._notice(f"Pas d'opacité : {value} %")
+
+    def ask_default_opacity(self):
+        from tkinter import simpledialog
+        value = simpledialog.askinteger(
+            "Opacité des nouveaux carrés", "Opacité (de 10 à 100 %) :",
+            initialvalue=round(self.default_opacity * 100), minvalue=10, maxvalue=100,
+            parent=self.canvas.winfo_toplevel())
+        if value is None:
+            return
+        self.default_opacity = value / 100
+        self.canvas.default_square_opacity = self.default_opacity
+        data = _load_settings()
+        data["default_square_opacity"] = self.default_opacity
+        _save_settings(data)
+        self.canvas._notice(f"Opacité des nouveaux carrés : {value} %")
 
     # ------------------------------------------------------------------
     # Raccourcis
@@ -380,6 +428,13 @@ class OpacityFeature:
         menu.add_command(label="Opacité… (sélection)", command=self.ask)
         menu.add_command(label="Opacité 100 % (sélection)", command=lambda: self.reset())
 
+    @staticmethod
+    def _load_default_opacity():
+        opacity = _load_settings().get("default_square_opacity", 1.0)
+        if isinstance(opacity, (int, float)) and MIN_OPACITY <= opacity <= 1.0:
+            return float(opacity)
+        return 1.0
+
     def _load_step(self):
         step = _load_settings().get("opacity_step", DEFAULT_STEP)
         if isinstance(step, (int, float)) and 0.01 <= step <= MAX_STEP:
@@ -392,6 +447,7 @@ def install(canvas):
     feature = OpacityFeature(canvas)
     canvas.opacity = feature
     canvas.set_opacity_step = feature.ask_step
+    canvas.set_default_square_opacity = feature.ask_default_opacity
     canvas.ask_opacity = feature.ask
     canvas.ask_opacity_all = lambda: feature.ask("all")
     canvas.reset_opacity = feature.reset
