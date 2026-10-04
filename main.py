@@ -31,12 +31,21 @@ class NodeCanvasApp:
         menubar.add_cascade(label="Fond", menu=bg_menu)
         bg_menu.add_command(label="Charger image de fond", command=self._load_background)
         bg_menu.add_command(label="Retirer image de fond", command=self._remove_background)
+        bg_menu.add_separator()
+        bg_menu.add_command(label="Tourner le fond…", command=self.canvas._rotate_background)
+        bg_menu.add_separator()
+        bg_menu.add_command(label="Verrouiller/Déverrouiller le fond", command=self.canvas.toggle_background_lock)
+
+        settings_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Réglages", menu=settings_menu)
+        settings_menu.add_command(label="Taille par défaut des carrés…", command=self.canvas.set_default_square_size)
+        settings_menu.add_command(label="Épaisseur des liens au survol…", command=self.canvas.set_link_width)
 
     def _export(self):
         filepath = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")])
         if filepath:
             try:
-                export_json(self.canvas.squares, self.canvas.links, self.canvas.folders, self.canvas.background_image, filepath)
+                export_json(self.canvas.squares, self.canvas.links, self.canvas.folders, self.canvas.get_background_state(), filepath)
                 messagebox.showinfo("Export", "Export réussi !")
             except Exception as e:
                 messagebox.showerror("Erreur", str(e))

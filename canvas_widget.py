@@ -55,6 +55,7 @@ class NodeCanvas(tk.Canvas):
         self.bg_y = 0
         self.bg_width = 0
         self.bg_height = 0
+        self.bg_rotation = 0
 
         # --- vue ---
         self.zoom = 1.0
@@ -99,6 +100,8 @@ class NodeCanvas(tk.Canvas):
         m.add_command(label="Renommer (F2)", command=self._rename)
         m.add_separator()
         m.add_command(label="Coller image (Ctrl+V)", command=self._paste_from_clipboard)
+        m.add_separator()
+        m.add_command(label="Tourner image…", command=self._rotate_image)
         m.add_separator()
         m.add_command(label="Verrouiller/Déverrouiller", command=self._toggle_lock)
         m.add_separator()
@@ -276,6 +279,10 @@ class NodeCanvas(tk.Canvas):
         self.selected_square = self.selected_folder = None
         self.hovered_square = self.hovered_folder = None
         self.connecting_from = self.connect_line = None
+        self.bg_rotation = 0
+        if isinstance(background_image, dict):
+            self.bg_rotation = background_image.get("rotation", 0)
+            background_image = background_image.get("image", "")
         self.set_background_image(background_image)
         self._redraw()
 
@@ -498,13 +505,16 @@ class NodeCanvas(tk.Canvas):
         if img is None:
             return None
         box = max(int(sq.size * self.zoom) - 4, 1)
-        key = (box, fast)
+        key = (box, fast, sq.rotation)
         cached = self._photo_cache.get(sq.id)
         if cached and cached[0] == key:
             return cached[1]
         scale = min(box / img.width, box / img.height)
         size = (max(int(img.width * scale), 1), max(int(img.height * scale), 1))
-        photo = ImageTk.PhotoImage(img.resize(size, Image.NEAREST if fast else Image.LANCZOS))
+        img = img.resize(size, Image.NEAREST if fast else Image.LANCZOS)
+        if sq.rotation:
+            img = img.rotate(-sq.rotation, expand=True, resample=Image.BICUBIC)
+        photo = ImageTk.PhotoImage(img)
         self._photo_cache[sq.id] = (key, photo)
         return photo
 
@@ -587,6 +597,8 @@ class NodeCanvas(tk.Canvas):
         img = self.bg_original
         if size != img.size:
             img = img.resize(size, Image.NEAREST if fast else Image.LANCZOS)
+        if self.bg_rotation:
+            img = img.rotate(-self.bg_rotation, expand=True, resample=Image.BICUBIC)
         self.bg_photo = ImageTk.PhotoImage(img)
         self.create_image(self.bg_x * z, self.bg_y * z, image=self.bg_photo, anchor="nw", tags="background")
         self.tag_lower("background")
@@ -855,6 +867,36 @@ class NodeCanvas(tk.Canvas):
                 obj.title = name
                 self._draw_folder(obj)
 
+    def _rotate_image(self):
+        sq = self.selected_square
+        if not sq or not sq.image_path:
+            return
+        from dialogs import ask_string
+        value = ask_string(self.winfo_toplevel(), "Rotation", "Angle en degrés :", str(sq.rotation))
+        if value is None:
+            return
+        try:
+            angle = float(value)
+        except (ValueError, OverflowError):
+            return
+        sq.rotation = angle % 360
+        self._photo_cache.pop(sq.id, None)
+        self._draw_square(sq)
+
+    def _rotate_background(self):
+        if not self.background_image:
+            return
+        from dialogs import ask_string
+        value = ask_string(self.winfo_toplevel(), "Rotation du fond", "Angle en degrés :", str(self.bg_rotation))
+        if value is None:
+            return
+        try:
+            angle = float(value)
+        except (ValueError, OverflowError):
+            return
+        self.bg_rotation = angle % 360
+        self._redraw_background()
+
     def _toggle_lock(self):
         sq = self.selected_square
         if sq:
@@ -902,6 +944,7 @@ class NodeCanvas(tk.Canvas):
             "width": round(self.bg_width),
             "height": round(self.bg_height),
             "locked": bool(getattr(self, "bg_locked", False)),
+            "rotation": round(getattr(self, "bg_rotation", 0)),
         }
 
     def set_default_square_size(self):

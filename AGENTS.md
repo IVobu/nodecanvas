@@ -32,7 +32,8 @@ nodecanvas/
 - Dossiers : double-clic = replier/déplier (contenu masqué, icône avec compteur) ; en-tête glissable ; drop d'un carré sur un dossier ouvert = assignation ; resize possible.
 - Fond : menu "Fond" → charger/retirer/**verrouiller-déverrouiller** ; drag + handle visible en bas-droite (carré doré) ; état (x,y,w,h,locked) sauvegardé en JSON. Le verrou bloque drag/resize (contour doré pointillé).
 - Réglages : menu "Réglages" → taille par défaut des carrés (10-500), épaisseur des liens au survol (1-20).
-- Images : drop depuis l'explorateur (png/jpg/gif/bmp/**webp**), Ctrl+V presse-papiers (sauvegarde dans assets/), images redimensionnées dynamiquement avec le carré.
+- Images : drop depuis l'explorateur (png/jpg/gif/bmp/**webp**), Ctrl+V presse-papiers (sauvegarde dans assets/), images redimensionnées dynamiquement avec le carré, rotation custom (menu contextuel "Tourner image…").
+- Rotation : angle libre (degrés) pour le fond (menu "Fond → Tourner le fond…") et les images importées (menu contextuel).
 - **Zoom** : molette (0.1x–2.0x), Ctrl+0 = reset, menu "Affichage" → zoom avant/arrière/100%.
 - **Mode "Ignorer les verrous"** : Ctrl+L ou menu "Affichage" → les éléments verrouillés laissent passer les clics.
 - **Raccourcis clavier** : Suppr = supprimer, F2 = renommer, Échap = annuler connexion, Ctrl+V = coller, Ctrl+0 = zoom 100%.

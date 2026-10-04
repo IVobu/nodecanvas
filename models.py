@@ -2,7 +2,7 @@ import uuid
 
 
 class Square:
-    def __init__(self, x, y, size=60, color="#4A90D9", name="", folder_id=None, image_path=None, locked=False):
+    def __init__(self, x, y, size=60, color="#4A90D9", name="", folder_id=None, image_path=None, locked=False, rotation=0):
         self.id = str(uuid.uuid4())[:8]
         self.x = x
         self.y = y
@@ -12,6 +12,7 @@ class Square:
         self.folder_id = folder_id
         self.image_path = image_path
         self.locked = locked
+        self.rotation = rotation
 
     def contains(self, px, py):
         return self.x <= px <= self.x + self.size and self.y <= py <= self.y + self.size
@@ -30,11 +31,12 @@ class Square:
             "folder_id": self.folder_id,
             "image_path": self.image_path,
             "locked": self.locked,
+            "rotation": self.rotation,
         }
 
     @classmethod
     def from_dict(cls, data):
-        sq = cls(data["x"], data["y"], data.get("size", 60), data.get("color", "#4A90D9"), data.get("name", ""), data.get("folder_id"), data.get("image_path"), data.get("locked", False))
+        sq = cls(data["x"], data["y"], data.get("size", 60), data.get("color", "#4A90D9"), data.get("name", ""), data.get("folder_id"), data.get("image_path"), data.get("locked", False), data.get("rotation", 0))
         sq.id = data["id"]
         return sq
 

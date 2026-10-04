@@ -1,12 +1,27 @@
 import json
-import os
 from models import Square, Link, Folder
 
+DEFAULT_BACKGROUND = {"image": "", "x": 0, "y": 0, "width": 0, "height": 0, "locked": False, "rotation": 0}
 
-def export_json(squares, links, folders, background_image, filepath):
+
+def _normalize_background(background):
+    if isinstance(background, dict):
+        normalized = dict(DEFAULT_BACKGROUND)
+        for key in DEFAULT_BACKGROUND:
+            if key in background:
+                normalized[key] = background[key]
+        return normalized
+    if isinstance(background, str) and background:
+        return {"image": background, "x": 0, "y": 0, "width": 0, "height": 0, "locked": False}
+    return dict(DEFAULT_BACKGROUND)
+
+
+def export_json(squares, links, folders, background, filepath):
+    background = _normalize_background(background)
     data = {
         "version": 1,
-        "background_image": background_image,
+        "background": background,
+        "background_image": background["image"],
         "squares": [sq.to_dict() for sq in squares],
         "links": [ln.to_dict() for ln in links],
         "folders": [fd.to_dict() for fd in folders],
@@ -22,6 +37,8 @@ def import_json(filepath):
     squares = [Square.from_dict(sq) for sq in data.get("squares", [])]
     links = [Link.from_dict(ln) for ln in data.get("links", [])]
     folders = [Folder.from_dict(fd) for fd in data.get("folders", [])]
-    background_image = data.get("background_image", "")
 
-    return squares, links, folders, background_image
+    raw = data["background"] if "background" in data else data.get("background_image", "")
+    background = _normalize_background(raw)
+
+    return squares, links, folders, background
