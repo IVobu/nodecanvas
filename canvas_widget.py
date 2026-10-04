@@ -1687,7 +1687,8 @@ class NodeCanvas(tk.Canvas):
         self.save_settings()
 
     def set_square_size(self, all_squares=True):
-        """Fixe la taille des carrés : tous les carrés existants sont redimensionnés."""
+        """Fixe la taille des carrés : tous les carrés existants sont redimensionnés.
+        Les carrés contenant une image ne sont pas touchés."""
         from dialogs import ask_string
         value = ask_string(self.winfo_toplevel(), "Taille des carrés",
                            f"Taille des carrés ({MIN_SQUARE_SIZE} à {MAX_SQUARE_SIZE}) :",
@@ -1700,15 +1701,18 @@ class NodeCanvas(tk.Canvas):
             return
         size = max(MIN_SQUARE_SIZE, min(MAX_SQUARE_SIZE, size))
         self.square_size = size
-        if all_squares and self.squares:
+        targets = [sq for sq in self.squares if not sq.image_path]   # images ignorées
+        if all_squares and targets:
             self.push_undo()
-            for sq in self.squares:
+            for sq in targets:
                 cx, cy = sq.center()
                 sq.size = size
                 sq.x, sq.y = cx - size / 2, cy - size / 2      # le centre ne bouge pas
             self._redraw()
         self.save_settings()
-        self._notice(f"Taille des carrés : {size}")
+        skipped = len(self.squares) - len(targets)
+        self._notice(f"Taille des carrés : {size}" if not skipped
+                     else f"Taille des carrés : {size} ({skipped} image(s) ignorée(s))")
 
     def set_default_square_size(self):
         self.set_square_size()
