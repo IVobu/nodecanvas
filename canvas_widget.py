@@ -280,10 +280,14 @@ class NodeCanvas(tk.Canvas):
         self.hovered_square = self.hovered_folder = None
         self.connecting_from = self.connect_line = None
         self.bg_rotation = 0
+        self.bg_locked = False
         if isinstance(background_image, dict):
             self.bg_rotation = background_image.get("rotation", 0)
+            self.bg_locked = bool(background_image.get("locked", False))
             background_image = background_image.get("image", "")
         self.set_background_image(background_image)
+        if self.bg_locked:
+            self._redraw_background()
         self._redraw()
 
     # ------------------------------------------------------------------
