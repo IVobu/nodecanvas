@@ -9,6 +9,7 @@ import json
 import math
 import os
 import sys
+import time
 import uuid
 import tkinter as tk
 
@@ -47,8 +48,8 @@ SELECT_COLOR = "#4FC3F7"
 LOCK_COLOR = "#FFD700"
 
 PRESET_KEYS = {
-    "1": 1, "exclam": 1, "one": 1, "ampersand": 1, "KP_1": 1,
-    "2": 2, "at": 2, "two": 2, "eacute": 2, "KP_2": 2,
+    "1": 1, "exclam": 1, "one": 1, "ampersand": 1, "KP_1": 1, "KP_End": 1,
+    "2": 2, "at": 2, "two": 2, "eacute": 2, "KP_2": 2, "KP_Down": 2,
 }
 
 
@@ -137,6 +138,10 @@ class NodeCanvas(tk.Canvas):
         self._grabbed = None         # objet dont la poignée est en cours de glissement
         self._snapshot_taken = False
         self._pending_preset = None
+        self._quick_held = []           # touches 1/2 maintenues (carré rapide au clic droit)
+        self._quick_jobs = {}           # anti-répétition : libère après le relâchement
+        self._quick_at = {}             # instant du dernier appui (appui bref = touche armée)
+        self.alt_down = False           # Alt suivi en plus du bit d'état de la souris
         self.handles_on = False       # R maintenu : poignées de redimensionnement / rotation actives
         self._mouse = (0, 0)
         self.ignore_locked = bool(_settings.get("ignore_locked", False))  # True : les éléments verrouillés laissent passer les clics
@@ -224,7 +229,7 @@ class NodeCanvas(tk.Canvas):
         self.bind("<Motion>", self._on_motion)
         self.bind("<Enter>", lambda e: self.focus_set())
         self.bind("<Leave>", self._on_leave)
-        self.bind("<FocusOut>", lambda e: self._set_handles(False))
+        self.bind("<FocusOut>", self._on_focus_out)
         for key in ("r", "R"):
             self.bind(f"<KeyPress-{key}>", lambda e: self._set_handles(True))
             self.bind(f"<KeyRelease-{key}>", lambda e: self._set_handles(False))
@@ -242,11 +247,9 @@ class NodeCanvas(tk.Canvas):
             self.bind(f"<Key-{key}>", lambda e: self.flip_selected(False))
         self.bind("<Key-0>", lambda e: self.reset_transform())
         self.bind("<KeyPress>", self._on_key_press)
-        for keysym, which in (("1", 1), ("2", 2), ("KP_1", 1), ("KP_2", 2)):
-            try:
-                self.bind(f"<KeyPress-{keysym}>", lambda e, w=which: self._arm_square_color(w))
-            except tk.TclError:      # keysym absent sur ce clavier
-                pass
+        self._bind_quick_keys()         # 1 / 2 maintenues : carré au clic droit
+        self.bind_all("<Alt-KeyPress>", lambda e: self._set_alt(True))
+        self.bind_all("<Alt-KeyRelease>", lambda e: self._set_alt(False))
         self.bind("<Control-c>", lambda e: self.copy_selected())
         self.bind("<Control-C>", lambda e: self.copy_selected())
         self.bind("<Control-a>", lambda e: self.select_all_squares())
@@ -258,6 +261,68 @@ class NodeCanvas(tk.Canvas):
         self.bind("<Control-y>", lambda e: self.redo())
         self.bind_all("<Control-l>", lambda e: self.toggle_ignore_locked())
         self.bind_all("<Control-L>", lambda e: self.toggle_ignore_locked())
+
+    def _bind_quick_keys(self):
+        """Touches 1 et 2 (AZERTY, pavé numérique) : le clic droit pendant l'appui
+        crée un carré avec la couleur et le nom de la touche."""
+        for keysym in PRESET_KEYS:
+            try:
+                self.bind_all(f"<KeyPress-{keysym}>", self._on_quick_press, add="+")
+                self.bind_all(f"<KeyRelease-{keysym}>", self._on_quick_release, add="+")
+            except tk.TclError:      # keysym absent sur ce clavier
+                pass
+
+    def _on_quick_press(self, event):
+        which = PRESET_KEYS.get(event.keysym)
+        if not which:
+            return
+        job = self._quick_jobs.pop(which, None)
+        if job:
+            self.after_cancel(job)        # répétition automatique : press/release en rafale
+        if which in self._quick_held:
+            self._quick_held.remove(which)
+        self._quick_held.append(which)
+        self._quick_at[which] = time.monotonic()
+        self._pending_preset = None
+
+    def _on_quick_release(self, event):
+        which = PRESET_KEYS.get(event.keysym)
+        if not which:
+            return
+        job = self._quick_jobs.pop(which, None)
+        if job:
+            self.after_cancel(job)
+        self._quick_jobs[which] = self.after(40, lambda: self._quick_drop(which))
+        # appui bref (< 0,3 s) : la touche reste armée pour le prochain clic droit
+        if time.monotonic() - self._quick_at.get(which, 0) < 0.3:
+            self._pending_preset = which
+
+    def _quick_drop(self, which):
+        self._quick_jobs.pop(which, None)
+        if which in self._quick_held:
+            self._quick_held.remove(which)
+
+    def _quick_key(self):
+        """Touche 1/2 actuellement maintenue (la dernière pressée)."""
+        return self._quick_held[-1] if self._quick_held else None
+
+    def _set_alt(self, value):
+        value = bool(value)
+        if value == self.alt_down:
+            return
+        self.alt_down = value
+        self._update_cursor(*self._mouse)
+
+    def _on_focus_out(self, event):
+        """Perte de focus : plus aucune touche n'est considérée comme enfoncée."""
+        for job in self._quick_jobs.values():
+            self.after_cancel(job)
+        self._quick_jobs.clear()
+        self._quick_held.clear()
+        self._quick_at.clear()
+        self._pending_preset = None
+        self._set_alt(False)
+        self._set_handles(False)
 
     def _setup_dnd(self):
         if TKDND_AVAILABLE and hasattr(self, "drop_target_register"):
@@ -377,7 +442,9 @@ class NodeCanvas(tk.Canvas):
 
     # --- R : poignées de redimensionnement / rotation --------------------
     def _alt_key(self, event):
-        """Touche Alt enfoncée d'après l'état de l'événement souris."""
+        """Touche Alt enfoncée ? (suivi des touches + bit d'état de l'événement souris)."""
+        if self.alt_down:
+            return True
         st = getattr(event, "state", 0)
         if sys.platform.startswith("win"):
             return bool(st & 0x20000)
@@ -1217,10 +1284,12 @@ class NodeCanvas(tk.Canvas):
 
     def _on_right_click(self, event):
         x, y = self._pos(event)
-        if self._pending_preset is not None:
+        which = self._quick_key()          # touche 1/2 maintenue : carré immédiat
+        if which is None:
             which, self._pending_preset = self._pending_preset, None
+        if which is not None:              # couleur et nom de la touche
             color, name = self._preset(which)
-            self.add_square(x, y, size=self.square_size, color=color, name=name)
+            self._create_square(x, y, color, name)
             return
         self.context_menu_x, self.context_menu_y = x, y
         sq = self._square_at(x, y)
@@ -1333,16 +1402,18 @@ class NodeCanvas(tk.Canvas):
         return self.default_square_color2, self.default_square_name2
 
     def _on_key_press(self, event):
-        which = PRESET_KEYS.get(event.keysym)
-        if which:
-            self._arm_square_color(which)
+        """Les touches 1/2 sont traitées par _bind_quick_keys (appui + relâchement)."""
+        return
 
-    def _arm_square_color(self, which):
-        self._pending_preset = which
+    def _create_square(self, x, y, color="#4A90D9", name=""):
+        """Crée un carré ; s'il tombe dans un dossier ouvert, il en devient membre."""
+        sq = self.add_square(x, y, size=self.square_size, color=color, name=name)
+        self._assign_folder(sq)
+        return sq
 
     def _add_square_at_cursor(self):
         name = self._ask_name("Nouveau carré") if self.ask_name_on_create else None
-        self.add_square(self.context_menu_x, self.context_menu_y, size=self.square_size, name=name or "")
+        self._create_square(self.context_menu_x, self.context_menu_y, name=name or "")
 
     def _add_folder_at_cursor(self):
         title = self._ask_name("Nouveau dossier", "Dossier") if self.ask_name_on_create else None

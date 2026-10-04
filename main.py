@@ -59,10 +59,14 @@ class NodeCanvasApp:
         settings_menu.add_command(label="Épaisseur des liens…", command=self.canvas.set_link_width)
         settings_menu.add_command(label="Couleur des liens…", command=self.canvas.set_link_color)
         settings_menu.add_separator()
-        settings_menu.add_command(label="Couleur par défaut 1…", command=lambda: self.canvas.set_default_square_color(1))
-        settings_menu.add_command(label="Couleur par défaut 2…", command=lambda: self.canvas.set_default_square_color(2))
-        settings_menu.add_command(label="Nom par défaut 1…", command=lambda: self.canvas.set_default_square_name(1))
-        settings_menu.add_command(label="Nom par défaut 2…", command=lambda: self.canvas.set_default_square_name(2))
+        settings_menu.add_command(label="Carré rapide 1 (touche 1 + clic droit) : couleur…",
+                                  command=lambda: self.canvas.set_default_square_color(1))
+        settings_menu.add_command(label="Carré rapide 1 (touche 1 + clic droit) : nom…",
+                                  command=lambda: self.canvas.set_default_square_name(1))
+        settings_menu.add_command(label="Carré rapide 2 (touche 2 + clic droit) : couleur…",
+                                  command=lambda: self.canvas.set_default_square_color(2))
+        settings_menu.add_command(label="Carré rapide 2 (touche 2 + clic droit) : nom…",
+                                  command=lambda: self.canvas.set_default_square_name(2))
         settings_menu.add_separator()
         settings_menu.add_command(label="Annulations max (Ctrl+Z)…", command=self.canvas.set_undo_depth)
         self._bg_block_var = tk.BooleanVar(value=self.canvas.bg_blocks_clicks)
