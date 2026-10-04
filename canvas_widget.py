@@ -38,23 +38,48 @@ HANDLE = 12              # poignée de redimensionnement (pixels écran)
 HEADER_H = 30            # en-tête d'un dossier ouvert (monde)
 ICON_W, ICON_H = 56, 42  # icône d'un dossier fermé (monde)
 FOLDER_MIN_W, FOLDER_MIN_H = 120, 80
+MIN_SQUARE_SIZE, MAX_SQUARE_SIZE = 4, 1000
+MIN_LINK_WIDTH, MAX_LINK_WIDTH = 1, 100
 MIN_ZOOM, MAX_ZOOM = 0.1, 2.0
 ROT_HANDLE_DIST = 26      # distance de la poignée de rotation au bord (pixels écran)
 ROT_HIT = 10             # rayon de saisie de la poignée de rotation (pixels écran)
 SELECT_COLOR = "#4FC3F7"
 LOCK_COLOR = "#FFD700"
 
+PRESET_KEYS = {
+    "1": 1, "exclam": 1, "one": 1, "ampersand": 1, "KP_1": 1,
+    "2": 2, "at": 2, "two": 2, "eacute": 2, "KP_2": 2,
+}
+
 
 SETTINGS_PATH = os.path.join(os.path.expanduser("~"), ".nodecanvas_settings.json")
+
+DEFAULT_SETTINGS = {
+    "square_size": 60,
+    "link_width": 3,
+    "link_color": "#888888",
+    "ask_name_on_create": False,
+    "ignore_locked": False,
+    "default_square_color1": "#FF0000",
+    "default_square_color2": "#0000FF",
+    "default_square_name1": "Rouge",
+    "default_square_name2": "Bleu",
+    "undo_depth": 50,
+    "bg_blocks_clicks": True,
+}
 
 
 def _load_settings():
     try:
         with open(SETTINGS_PATH, encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            data = {}
     except (OSError, ValueError):
-        return {}
+        data = {}
+    merged = dict(DEFAULT_SETTINGS)
+    merged.update(data)
+    return merged
 
 
 def _save_settings(data):
@@ -97,12 +122,25 @@ class NodeCanvas(tk.Canvas):
         self.square_size = int(_settings.get("square_size", 60))
         self.link_width = int(_settings.get("link_width", 3))
         self.default_link_color = _settings.get("link_color", "#888888")
-        self.alt_down = False        # Alt maintenu : poignées de redimensionnement / rotation actives
+        self.default_square_color1 = _settings.get("default_square_color1", "#FF0000")
+        self.default_square_color2 = _settings.get("default_square_color2", "#0000FF")
+        self.default_square_name1 = _settings.get("default_square_name1", "Rouge")
+        self.default_square_name2 = _settings.get("default_square_name2", "Bleu")
+        self.undo_depth = max(1, min(500, int(_settings.get("undo_depth", 50))))
+        self.bg_blocks_clicks = bool(_settings.get("bg_blocks_clicks", True))
+        self._undo_stack = []
+        self._redo_stack = []
+        self._clipboard = None
+        self._marquee = None
+        self._snapshot_taken = False
+        self._pending_preset = None
+        self.handles_on = False       # R maintenu : poignées de redimensionnement / rotation actives
         self._mouse = (0, 0)
-        self.ignore_locked = False   # True : les éléments verrouillés laissent passer les clics
+        self.ignore_locked = bool(_settings.get("ignore_locked", False))  # True : les éléments verrouillés laissent passer les clics
 
         # --- interaction ---
         self.selected_square = None
+        self.selected_squares = []
         self.selected_folder = None
         self.hovered_square = None
         self.hovered_folder = None
@@ -128,6 +166,7 @@ class NodeCanvas(tk.Canvas):
         self._cursor = ""
 
         self._build_context_menu()
+        self._build_bg_menu()
         self._bind_events()
         self._setup_dnd()
         self.after(300, self._install_view_menu)
@@ -146,15 +185,30 @@ class NodeCanvas(tk.Canvas):
         m.add_separator()
         m.add_command(label="Coller image (Ctrl+V)", command=self._paste_from_clipboard)
         m.add_separator()
-        m.add_command(label="Pivoter 90° ↻ (R)", command=lambda: self.rotate_selected(90))
-        m.add_command(label="Pivoter 90° ↺ (Maj+R)", command=lambda: self.rotate_selected(-90))
+        m.add_command(label="Pivoter 90° ↻", command=lambda: self.rotate_selected(90))
+        m.add_command(label="Pivoter 90° ↺", command=lambda: self.rotate_selected(-90))
         m.add_command(label="Miroir horizontal (H)", command=lambda: self.flip_selected(True))
         m.add_command(label="Miroir vertical (V)", command=lambda: self.flip_selected(False))
         m.add_command(label="Réinitialiser rotation/miroir (0)", command=self.reset_transform)
         m.add_separator()
+        m.add_command(label="Poignées de taille/rotation : maintenir R", state=tk.DISABLED)
+        m.add_separator()
         m.add_command(label="Verrouiller/Déverrouiller", command=self._toggle_lock)
         m.add_separator()
+        m.add_command(label="Changer la couleur des liens", command=self.set_link_color)
+        m.add_command(label="Supprimer tous les liens", command=self.clear_links)
+        m.add_separator()
         m.add_command(label="Supprimer", command=self._delete_selected)
+
+    def _build_bg_menu(self):
+        m = tk.Menu(self, tearoff=0)
+        self.bg_context_menu = m
+        self._bg_click_var = tk.BooleanVar(value=self.bg_blocks_clicks)
+        m.add_checkbutton(label="Fond non cliquable (décocher pour le déplacer)",
+                          variable=self._bg_click_var, command=self.toggle_bg_blocks_clicks)
+        m.add_command(label="Verrouiller/Déverrouiller le fond", command=self.toggle_background_lock)
+        m.add_separator()
+        m.add_command(label="Retirer l'image de fond", command=lambda: self.set_background_image(None))
 
     def _bind_events(self):
         self.bind("<Button-1>", self._on_left_click)
@@ -167,13 +221,10 @@ class NodeCanvas(tk.Canvas):
         self.bind("<Motion>", self._on_motion)
         self.bind("<Enter>", lambda e: self.focus_set())
         self.bind("<Leave>", self._on_leave)
-        self.bind("<FocusOut>", lambda e: self._set_alt(False))
-        for key in ("Alt_L", "Alt_R", "Meta_L", "Meta_R", "Option_L", "Option_R"):
-            try:
-                self.bind_all(f"<KeyPress-{key}>", lambda e: self._set_alt(True))
-                self.bind_all(f"<KeyRelease-{key}>", lambda e: self._set_alt(False))
-            except tk.TclError:      # keysym inconnu sur cette plateforme
-                pass
+        self.bind("<FocusOut>", lambda e: self._set_handles(False))
+        for key in ("r", "R"):
+            self.bind(f"<KeyPress-{key}>", lambda e: self._set_handles(True))
+            self.bind(f"<KeyRelease-{key}>", lambda e: self._set_handles(False))
         self.bind("<MouseWheel>", self._on_wheel)       # Windows / macOS
         self.bind("<Button-4>", self._on_wheel)         # Linux
         self.bind("<Button-5>", self._on_wheel)
@@ -182,13 +233,26 @@ class NodeCanvas(tk.Canvas):
         self.bind("<F2>", lambda e: self._rename())
         self.bind("<Escape>", lambda e: self._cancel_connect())
         self.bind("<Control-Key-0>", lambda e: self.reset_zoom())
-        for key in ("r", "R"):
-            self.bind(f"<Key-{key}>", lambda e: self.rotate_selected(-90 if e.keysym == "R" else 90))
         for key in ("h", "H"):
             self.bind(f"<Key-{key}>", lambda e: self.flip_selected(True))
         for key in ("v", "V"):
             self.bind(f"<Key-{key}>", lambda e: self.flip_selected(False))
         self.bind("<Key-0>", lambda e: self.reset_transform())
+        self.bind("<KeyPress>", self._on_key_press)
+        for keysym, which in (("1", 1), ("2", 2), ("KP_1", 1), ("KP_2", 2)):
+            try:
+                self.bind(f"<KeyPress-{keysym}>", lambda e, w=which: self._arm_square_color(w))
+            except tk.TclError:      # keysym absent sur ce clavier
+                pass
+        self.bind("<Control-c>", lambda e: self.copy_selected())
+        self.bind("<Control-C>", lambda e: self.copy_selected())
+        self.bind("<Control-a>", lambda e: self.select_all_squares())
+        self.bind("<Control-Shift-V>", lambda e: self.paste_squares())
+        self.bind("<Control-Shift-v>", lambda e: self.paste_squares())
+        self.bind("<Control-z>", lambda e: self.undo())
+        self.bind("<Control-Shift-Z>", lambda e: self.redo())
+        self.bind("<Control-Shift-z>", lambda e: self.redo())
+        self.bind("<Control-y>", lambda e: self.redo())
         self.bind_all("<Control-l>", lambda e: self.toggle_ignore_locked())
         self.bind_all("<Control-L>", lambda e: self.toggle_ignore_locked())
 
@@ -308,11 +372,9 @@ class NodeCanvas(tk.Canvas):
         hx, hy = self._rot_handle_pos(sq)
         return math.hypot(x - hx, y - hy) <= ROT_HIT / self.zoom
 
-    # --- Alt : poignées de redimensionnement / rotation -----------------
-    def _alt(self, event):
-        """Alt est-il enfoncé ? (suivi des touches + bit d'état de l'événement souris)"""
-        if self.alt_down:
-            return True
+    # --- R : poignées de redimensionnement / rotation --------------------
+    def _alt_key(self, event):
+        """Touche Alt enfoncée d'après l'état de l'événement souris."""
         st = getattr(event, "state", 0)
         if sys.platform.startswith("win"):
             return bool(st & 0x20000)
@@ -320,17 +382,17 @@ class NodeCanvas(tk.Canvas):
             return bool(st & 0x10)
         return bool(st & 0x8)
 
-    def _set_alt(self, value):
+    def _set_handles(self, value):
         value = bool(value)
-        if value == self.alt_down:
+        if value == self.handles_on:
             return
-        self.alt_down = value
+        self.handles_on = value
         self._refresh_handles()
         self._update_cursor(*self._mouse)
 
     def _refresh_handles(self):
         self.delete("handle")
-        if not self.alt_down:
+        if not self.handles_on:
             return
         for obj in self._stack():
             self._draw_handles_for(obj)
@@ -366,7 +428,7 @@ class NodeCanvas(tk.Canvas):
 
     def _draw_bg_handle(self):
         self.delete("bg_handle")
-        if not self.alt_down or self.bg_original is None:
+        if not self.handles_on or self.bg_original is None:
             return
         z = self.zoom
         x2, y2 = (self.bg_x + self.bg_width) * z, (self.bg_y + self.bg_height) * z
@@ -434,12 +496,14 @@ class NodeCanvas(tk.Canvas):
     # API publique
     # ------------------------------------------------------------------
     def add_square(self, x, y, size=None, color="#4A90D9", name=""):
+        self.push_undo()
         sq = Square(x, y, size or self.square_size, color, name)
         self.squares.append(sq)
         self._draw_square(sq)
         return sq
 
     def add_folder(self, x, y, w=300, h=250, title="Dossier"):
+        self.push_undo()
         fd = Folder(x, y, w, h, title)
         self.folders.append(fd)
         self._draw_folder(fd)
@@ -449,8 +513,10 @@ class NodeCanvas(tk.Canvas):
         for ln in self.links:
             if ln.source_id == source_id and ln.target_id == target_id:
                 return None
+        self.push_undo()
         ln = Link(source_id, target_id)
         self.links.append(ln)
+        self._update_links()
         return ln
 
     def load_data(self, squares, links, folders, background_image):
@@ -461,6 +527,7 @@ class NodeCanvas(tk.Canvas):
         self._photo_cache.clear()
         self._base_cache.clear()
         self.selected_square = self.selected_folder = None
+        self.selected_squares = []
         self.hovered_square = self.hovered_folder = None
         self.connecting_from = self.connect_line = None
         self.set_background_image(background_image)
@@ -501,16 +568,16 @@ class NodeCanvas(tk.Canvas):
         if hasattr(self, "_ignore_var"):
             self._ignore_var.set(self.ignore_locked)
         self._after_ignore_change()
+        self.save_settings()
 
     def _on_ask_name_menu(self):
         self.ask_name_on_create = bool(self._ask_var.get())
-        data = _load_settings()
-        data["ask_name_on_create"] = self.ask_name_on_create
-        _save_settings(data)
+        self.save_settings()
 
     def _on_ignore_menu(self):
         self.ignore_locked = bool(self._ignore_var.get())
         self._after_ignore_change()
+        self.save_settings()
 
     def _after_ignore_change(self):
         if self.ignore_locked:
@@ -565,7 +632,7 @@ class NodeCanvas(tk.Canvas):
             ox, oy = _rot(lx, ly, rot)
             return cx + ox, cy + oy
 
-        if sq is self.selected_square:
+        if self._is_selected(sq):
             outline, width = SELECT_COLOR, 3
         elif sq.locked:
             outline, width = LOCK_COLOR, 3
@@ -589,7 +656,7 @@ class NodeCanvas(tk.Canvas):
                                  width=max(int(sq.size * z) - 6, 10), tags=tags, **opts)
         if keep_order:
             self._restore_order(sq)
-        if self.alt_down:
+        if self.handles_on:
             self._draw_handles_for(sq)
 
     def _restore_order(self, obj):
@@ -661,11 +728,11 @@ class NodeCanvas(tk.Canvas):
                                  anchor="w", font=f, tags=tags)
         if keep_order:
             self._restore_order(fd)
-        if self.alt_down:
+        if self.handles_on:
             self._draw_handles_for(fd)
 
     def _update_links(self):
-        """Liens du carré survolé, ou de tout le contenu d'un dossier fermé survolé."""
+        """Tous les liens sont dessinés ; ceux du carré survolé sont mis en avant."""
         self.delete("link")
         focus = set()
         h = self.hovered_square
@@ -673,20 +740,21 @@ class NodeCanvas(tk.Canvas):
             focus = {h.id}
         elif self.hovered_folder is not None and self.hovered_folder.collapsed:
             focus = {s.id for s in self._members(self.hovered_folder)}
-        if not focus:
-            return
         z = self.zoom
         for ln in self.links:
-            if ln.source_id not in focus and ln.target_id not in focus:
-                continue
             src, tgt = self._find_square(ln.source_id), self._find_square(ln.target_id)
             if not src or not tgt:
                 continue
             if src.folder_id and src.folder_id == tgt.folder_id and not self._visible(src):
                 continue   # lien interne à un dossier fermé
+            active = ln.source_id in focus or ln.target_id in focus
+            width = getattr(ln, "width", None) or self.link_width
+            if active:
+                width = min(MAX_LINK_WIDTH, width + 1)
             x1, y1 = self._anchor(src)
             x2, y2 = self._anchor(tgt)
-            self.create_line(x1 * z, y1 * z, x2 * z, y2 * z, fill=ln.color, width=3, tags="link")
+            self.create_line(x1 * z, y1 * z, x2 * z, y2 * z, fill=ln.color,
+                             width=max(MIN_LINK_WIDTH, width), tags="link")
         self._place_links()
 
     # ------------------------------------------------------------------
@@ -835,18 +903,73 @@ class NodeCanvas(tk.Canvas):
     # ------------------------------------------------------------------
     # Sélection
     # ------------------------------------------------------------------
-    def _select(self, sq=None, fd=None):
-        old_sq, old_fd = self.selected_square, self.selected_folder
-        self.selected_square, self.selected_folder = sq, fd
-        if old_sq is not None and old_sq is not sq:
-            self._draw_square(old_sq)
-        if old_fd is not None and old_fd is not fd:
+    def _is_selected(self, sq):
+        return sq is not None and (sq is self.selected_square or sq in self.selected_squares)
+
+    def _select(self, sq=None, fd=None, add=False):
+        previous = list(self.selected_squares)
+        if self.selected_square is not None and self.selected_square not in previous:
+            previous.append(self.selected_square)
+        old_fd = self.selected_folder
+
+        if sq is not None and add:
+            if sq in self.selected_squares:
+                self.selected_squares.remove(sq)
+                if self.selected_square is sq:
+                    self.selected_square = self.selected_squares[-1] if self.selected_squares else None
+            else:
+                self.selected_squares.append(sq)
+                self.selected_square = sq
+            self.selected_folder = None
+        else:
+            self.selected_squares = [sq] if sq is not None else []
+            self.selected_square = sq
+            self.selected_folder = fd
+
+        for s in previous:
+            if s not in self.selected_squares:
+                self._draw_square(s)
+        for s in self.selected_squares:
+            self._draw_square(s)
+        if old_fd is not None and old_fd is not self.selected_folder:
             self._draw_folder(old_fd)
-        if sq is not None and sq is not old_sq:
-            self._draw_square(sq)
-        if fd is not None and fd is not old_fd:
-            self._draw_folder(fd)
+        if self.selected_folder is not None:
+            self._draw_folder(self.selected_folder)
         self._update_links()
+
+    def _deselect_square(self, sq):
+        if sq in self.selected_squares:
+            self.selected_squares.remove(sq)
+        if self.selected_square is sq:
+            self.selected_square = self.selected_squares[-1] if self.selected_squares else None
+        self._draw_square(sq)
+        for s in self.selected_squares:
+            self._draw_square(s)
+        self._update_links()
+
+    def _select_all(self, squares):
+        if not squares:
+            self._select()
+            return
+        previous = list(self.selected_squares)
+        self.selected_squares = list(squares)
+        self.selected_square = squares[-1]
+        self.selected_folder = None
+        for s in previous:
+            if s not in self.selected_squares:
+                self._draw_square(s)
+        for s in self.selected_squares:
+            self._draw_square(s)
+        self._update_links()
+
+    def select_all_squares(self):
+        self._select_all([s for s in self.squares if not (s.locked and self.ignore_locked)])
+
+    def _movable_squares(self):
+        squares = [s for s in self.selected_squares if not s.locked]
+        if not squares and self.selected_square is not None and not self.selected_square.locked:
+            squares = [self.selected_square]
+        return squares
 
     # ------------------------------------------------------------------
     # Souris
@@ -867,22 +990,26 @@ class NodeCanvas(tk.Canvas):
                 self._update_links()
             return
 
-        alt = self._alt(event)
-        if alt:                                   # poignées : uniquement avec Alt
+        alt = self._alt_key(event)
+        shift = bool(getattr(event, "state", 0) & 0x0001)
+        if self.handles_on:                        # poignées : uniquement avec R maintenu
             hit = self._handle_at(x, y)
             if hit:
                 obj, kind = hit
+                if not self._is_selected(obj):    # garder la sélection multiple en cours
+                    if isinstance(obj, Square):
+                        self._select(sq=obj)
+                    else:
+                        self._select(fd=obj)
                 if kind == "folder_resize":
                     self._select(fd=obj)
                     self._mode, self._anchor_pt, self._orig = "folder_resize", (x, y), (obj.w, obj.h)
                 elif kind == "rotate":
-                    self._select(sq=obj)
                     cx, cy = obj.center()
                     self._mode = "rotate"
                     self._rot_ref = (math.degrees(math.atan2(y - cy, x - cx)), getattr(obj, "rotation", 0.0))
                     self._cancel_anim()
                 else:
-                    self._select(sq=obj)
                     rot = getattr(obj, "rotation", 0.0)
                     cx, cy = obj.center()
                     ox, oy = _rot(-obj.size / 2, -obj.size / 2, rot)
@@ -893,7 +1020,10 @@ class NodeCanvas(tk.Canvas):
 
         sq = self._square_at(x, y)
         if sq:
-            self._select(sq=sq)
+            if alt:                               # Alt+clic : retire le carré de la sélection
+                self._deselect_square(sq)
+                return
+            self._select(sq=sq, add=shift)
             if not sq.locked:
                 self._mode, self._last = "move", (x, y)
             return
@@ -906,8 +1036,15 @@ class NodeCanvas(tk.Canvas):
             return
 
         self._select()
+        if shift:                                 # Maj+clic sur le vide : zone de sélection
+            self._mode = "marquee"
+            self._marquee = (event.x, event.y, event.x, event.y)
+            return
         if self._bg_hit(x, y):
-            if alt and self._in_handle(x, y, self.bg_x + self.bg_width, self.bg_y + self.bg_height):
+            if self.bg_blocks_clicks:
+                self._notice("Fond non cliquable")
+                return
+            if self.handles_on and self._in_handle(x, y, self.bg_x + self.bg_width, self.bg_y + self.bg_height):
                 self._mode, self._anchor_pt = "bg_resize", (x, y)
                 self._orig = (self.bg_width, self.bg_height)
             else:
@@ -921,11 +1058,18 @@ class NodeCanvas(tk.Canvas):
         z = self.zoom
         dx, dy = x - self._last[0], y - self._last[1]
 
+        if mode == "marquee":
+            self._update_marquee(event)
+            return
+
+        if mode in ("move", "resize", "rotate", "folder", "folder_resize", "bg_move", "bg_resize"):
+            self._take_snapshot()
+
         if mode == "move":
-            sq = self.selected_square
-            sq.x += dx
-            sq.y += dy
-            self.move(self._tag(sq), dx * z, dy * z)
+            for sq in self._movable_squares():
+                sq.x += dx
+                sq.y += dy
+                self.move(self._tag(sq), dx * z, dy * z)
             self._last = (x, y)
             self._update_links()
         elif mode == "resize":
@@ -933,13 +1077,18 @@ class NodeCanvas(tk.Canvas):
             rot = getattr(sq, "rotation", 0.0)
             p0 = self._corner0
             ddx, ddy = _rot(x - p0[0], y - p0[1], -rot)
-            new = max(30, self._orig + max(ddx - self._anchor_pt[0], ddy - self._anchor_pt[1]))
+            new = max(MIN_SQUARE_SIZE, self._orig + max(ddx - self._anchor_pt[0], ddy - self._anchor_pt[1]))
             if new != sq.size:
                 ox, oy = _rot(new / 2, new / 2, rot)       # le coin haut-gauche ne bouge pas à l'écran
                 sq.size = new
                 sq.x = p0[0] + ox - new / 2
                 sq.y = p0[1] + oy - new / 2
                 self._draw_square(sq, fast=True)
+                for other in self._movable_squares():      # toute la sélection prend la même taille
+                    if other is sq or other.size == new:
+                        continue
+                    other.size = new
+                    self._draw_square(other, fast=True)
                 self._update_links()
         elif mode == "rotate":
             sq = self.selected_square
@@ -949,6 +1098,12 @@ class NodeCanvas(tk.Canvas):
                                  bool(getattr(event, "state", 0) & 0x0001))   # Maj = pas de 15°
             sq.rotation = r % 360
             self._draw_square(sq, fast=True)
+            delta = sq.rotation - self._rot_ref[1]
+            for other in self._movable_squares():          # même rotation pour les autres
+                if other is sq:
+                    continue
+                other.rotation = (getattr(other, "rotation", 0.0) + delta) % 360
+                self._draw_square(other, fast=True)
             self._notice(f"{round(sq.rotation) % 360}°")
         elif mode == "folder":
             fd = self.selected_folder
@@ -968,12 +1123,16 @@ class NodeCanvas(tk.Canvas):
             fd.h = max(FOLDER_MIN_H, self._orig[1] + y - self._anchor_pt[1])
             self._draw_folder(fd)
         elif mode == "bg_move":
+            if self.bg_blocks_clicks:
+                return
             self.bg_x += dx
             self.bg_y += dy
             self.move("background", dx * z, dy * z)
             self.move("bg_handle", dx * z, dy * z)
             self._last = (x, y)
         elif mode == "bg_resize":
+            if self.bg_blocks_clicks:
+                return
             self.bg_width = max(50, self._orig[0] + x - self._anchor_pt[0])
             self.bg_height = max(50, self._orig[1] + y - self._anchor_pt[1])
             self._redraw_background(fast=True)
@@ -983,6 +1142,23 @@ class NodeCanvas(tk.Canvas):
     def _on_release(self, event):
         x, y = self._pos(event)
         mode, self._mode = self._mode, None
+        self._snapshot_taken = False
+
+        if mode == "marquee":
+            self.delete("marquee")
+            if self._marquee:
+                x0, y0, x1, y1 = self._marquee
+                self._marquee = None
+                wx0, wx1 = sorted((self.canvasx(x0) / self.zoom, self.canvasx(x1) / self.zoom))
+                wy0, wy1 = sorted((self.canvasy(y0) / self.zoom, self.canvasy(y1) / self.zoom))
+                inside = [s for s in self.squares
+                          if (not s.locked or not self.ignore_locked)
+                          and s.x < wx1 and s.x + s.size > wx0
+                          and s.y < wy1 and s.y + s.size > wy0]
+                self._select_all(inside)
+                if inside:
+                    self._notice(f"{len(inside)} carré(s) sélectionné(s)")
+            return
 
         if mode == "connect":
             src = self.connecting_from
@@ -993,7 +1169,8 @@ class NodeCanvas(tk.Canvas):
                 self._update_links()
             # sinon : on reste en attente d'un clic sur le second carré
         elif mode == "move":
-            self._assign_folder(self.selected_square)
+            for sq in self._movable_squares():
+                self._assign_folder(sq)
         elif mode == "resize":
             self._draw_square(self.selected_square)
             self._assign_folder(self.selected_square)
@@ -1025,26 +1202,45 @@ class NodeCanvas(tk.Canvas):
 
     def _on_right_click(self, event):
         x, y = self._pos(event)
+        if self._pending_preset is not None:
+            which, self._pending_preset = self._pending_preset, None
+            color, name = self._preset(which)
+            self.add_square(x, y, size=self.square_size, color=color, name=name)
+            return
         self.context_menu_x, self.context_menu_y = x, y
         sq = self._square_at(x, y)
         if sq:
             self._select(sq=sq)
+            menu = self.context_menu
         else:
             fd = self._folder_at(x, y)
             if fd:
                 self._select(fd=fd)
             else:
                 self._select()
+            menu = self.bg_context_menu if self._bg_hit(x, y) else self.context_menu
         try:
-            self.context_menu.tk_popup(event.x_root, event.y_root)
+            menu.tk_popup(event.x_root, event.y_root)
         finally:
-            self.context_menu.grab_release()
+            menu.grab_release()
+
+    def _update_marquee(self, event):
+        """Rectangle de sélection : suit la souris sur chaque mouvement."""
+        if not self._marquee:
+            return
+        x0, y0, _, _ = self._marquee
+        self._marquee = (x0, y0, event.x, event.y)
+        self.delete("marquee")
+        self.create_rectangle(x0, y0, event.x, event.y, outline=SELECT_COLOR,
+                              dash=(4, 3), width=1, tags="marquee")
+        self.tag_raise("marquee")
 
     def _on_motion(self, event):
+        if self._mode == "marquee":
+            self._update_marquee(event)
+            return
         x, y = self._pos(event)
         self._mouse = (x, y)
-        if self.alt_down and sys.platform.startswith("win") and not (getattr(event, "state", 0) & 0x20000):
-            self._set_alt(False)               # Alt relâché sans que l'événement clavier arrive
         sq = self._square_at(x, y)
         fd = None
         if sq is None:
@@ -1060,7 +1256,7 @@ class NodeCanvas(tk.Canvas):
 
     def _update_cursor(self, x, y):
         cur = ""
-        if self.alt_down and self.connecting_from is None:
+        if self.handles_on and self.connecting_from is None:
             hit = self._handle_at(x, y)
             if hit:
                 cur = "exchange" if hit[1] == "rotate" else "bottom_right_corner"
@@ -1114,6 +1310,19 @@ class NodeCanvas(tk.Canvas):
     # ------------------------------------------------------------------
     # Actions (menu contextuel / raccourcis)
     # ------------------------------------------------------------------
+    def _preset(self, which):
+        if which == 1:
+            return self.default_square_color1, self.default_square_name1
+        return self.default_square_color2, self.default_square_name2
+
+    def _on_key_press(self, event):
+        which = PRESET_KEYS.get(event.keysym)
+        if which:
+            self._arm_square_color(which)
+
+    def _arm_square_color(self, which):
+        self._pending_preset = which
+
     def _add_square_at_cursor(self):
         name = self._ask_name("Nouveau carré") if self.ask_name_on_create else None
         self.add_square(self.context_menu_x, self.context_menu_y, size=self.square_size, name=name or "")
@@ -1122,18 +1331,118 @@ class NodeCanvas(tk.Canvas):
         title = self._ask_name("Nouveau dossier", "Dossier") if self.ask_name_on_create else None
         self.add_folder(self.context_menu_x, self.context_menu_y, title=title or "Dossier")
 
+    # ------------------------------------------------------------------
+    # Historique (Ctrl+Z) / presse-papiers
+    # ------------------------------------------------------------------
+    def _state_snapshot(self):
+        return json.dumps({
+            "squares": [s.to_dict() for s in self.squares],
+            "links": [l.to_dict() for l in self.links],
+            "folders": [f.to_dict() for f in self.folders],
+        }, ensure_ascii=False)
+
+    def _apply_snapshot(self, snap):
+        data = json.loads(snap)
+        self.squares = [Square.from_dict(d) for d in data["squares"]]
+        self.links = [Link.from_dict(d) for d in data["links"]]
+        self.folders = [Folder.from_dict(d) for d in data["folders"]]
+        self._images.clear()
+        self._photo_cache.clear()
+        self._base_cache.clear()
+        self.selected_square = self.selected_folder = None
+        self.selected_squares = []
+        self.hovered_square = self.hovered_folder = None
+        self._cancel_connect()
+        self._cancel_anim()
+        self._redraw()
+
+    def _take_snapshot(self):
+        """Un seul instantané par geste (glisser, rotation…)."""
+        if self._snapshot_taken:
+            return
+        self._snapshot_taken = True
+        self.push_undo()
+
+    def push_undo(self):
+        self._undo_stack.append(self._state_snapshot())
+        del self._undo_stack[:max(0, len(self._undo_stack) - self.undo_depth)]
+        self._redo_stack.clear()
+
+    def undo(self):
+        if not self._undo_stack:
+            self._notice("Rien à annuler")
+            return
+        self._redo_stack.append(self._state_snapshot())
+        self._apply_snapshot(self._undo_stack.pop())
+        self._notice("Annulé")
+
+    def redo(self):
+        if not self._redo_stack:
+            self._notice("Rien à rétablir")
+            return
+        self._undo_stack.append(self._state_snapshot())
+        self._apply_snapshot(self._redo_stack.pop())
+        self._notice("Rétabli")
+
+    def copy_selected(self):
+        squares = [s for s in self.squares if self._is_selected(s)]
+        if not squares:
+            self._notice("Aucun carré sélectionné")
+            return
+        ids = {s.id for s in squares}
+        self._clipboard = {
+            "squares": [s.to_dict() for s in squares],
+            "links": [l.to_dict() for l in self.links
+                      if l.source_id in ids and l.target_id in ids],
+        }
+        self._notice(f"{len(squares)} carré(s) copié(s)")
+
+    def paste_squares(self):
+        clip = self._clipboard
+        if not clip:
+            self._notice("Presse-papiers des carrés vide")
+            return
+        self.push_undo()
+        offset = self.square_size / 3
+        id_map = {}
+        created = []
+        for data in clip["squares"]:
+            sq = Square.from_dict(data)
+            id_map[sq.id] = str(uuid.uuid4())[:8]
+            sq.id = id_map[sq.id]
+            sq.x += offset
+            sq.y += offset
+            self.squares.append(sq)
+            created.append(sq)
+        for data in clip["links"]:
+            ln = Link.from_dict(data)
+            ln.id = str(uuid.uuid4())[:8]
+            ln.source_id = id_map.get(ln.source_id, ln.source_id)
+            ln.target_id = id_map.get(ln.target_id, ln.target_id)
+            self.links.append(ln)
+        self._redraw()
+        self._select_all(created)
+        self._notice(f"{len(created)} carré(s) collé(s)")
+
     def _selected(self):
         return self.selected_square or self.selected_folder
 
     def _change_color(self):
-        obj = self._selected()
+        targets = [s for s in self.squares if self._is_selected(s)]
+        obj = targets[0] if targets else self._selected()
         if not obj:
             return
         from dialogs import ask_color
         color = ask_color(self.winfo_toplevel(), obj.color)
         if color:
-            obj.color = color
-            (self._draw_square if isinstance(obj, Square) else self._draw_folder)(obj)
+            self.push_undo()
+            if targets:
+                for sq in targets:
+                    sq.color = color
+                    self._draw_square(sq)
+            else:
+                obj.color = color
+                (self._draw_square if isinstance(obj, Square) else self._draw_folder)(obj)
 
     def _rename(self):
         obj = self._selected()
@@ -1142,6 +1451,7 @@ class NodeCanvas(tk.Canvas):
         is_sq = isinstance(obj, Square)
         name = self._ask_name("Renommer", obj.name if is_sq else obj.title)
         if name:
+            self.push_undo()
             if is_sq:
                 obj.name = name
                 self._draw_square(obj)
@@ -1171,24 +1481,28 @@ class NodeCanvas(tk.Canvas):
         return sq
 
     def rotate_selected(self, delta):
-        """Pivote le carré sélectionné de `delta` degrés, avec une courte animation."""
-        sq = self._editable_square()
-        if sq is None:
+        """Pivote de `delta` degrés toute la sélection, avec une courte animation."""
+        primary = self._editable_square()
+        if primary is None:
             return
+        squares = self._movable_squares() or [primary]
+        self.push_undo()
         self._cancel_anim()
-        start = getattr(sq, "rotation", 0.0)
+        starts = [getattr(s, "rotation", 0.0) for s in squares]
         frames = 8
 
         def step(i):
             t = i / frames
-            if i >= frames:
-                sq.rotation = (start + delta) % 360
+            done = i >= frames
+            for sq, st in zip(squares, starts):
+                ratio = 1 if done else (1 - (1 - t) ** 3)          # décélération douce
+                sq.rotation = (st + delta * ratio) % 360
+                self._draw_square(sq, fast=not done)
+            if done:
                 self._anim_job = None
-                self._draw_square(sq)                         # dernière image en haute qualité
-                self._notice(f"{round(sq.rotation) % 360}°")
+                self._draw_square(primary)                          # dernière image en haute qualité
+                self._notice(f"{round(primary.rotation) % 360}°")
                 return
-            sq.rotation = (start + delta * (1 - (1 - t) ** 3)) % 360   # décélération douce
-            self._draw_square(sq, fast=True)
             self._anim_job = self.after(14, lambda: step(i + 1))
 
         step(1)
@@ -1201,6 +1515,7 @@ class NodeCanvas(tk.Canvas):
         if not sq.image_path:
             self._notice("Le miroir ne s'applique qu'aux images")
             return
+        self.push_undo()
         self._cancel_anim()
         if horizontal:
             sq.flip_h = not getattr(sq, "flip_h", False)
@@ -1215,33 +1530,49 @@ class NodeCanvas(tk.Canvas):
         sq = self._editable_square()
         if sq is None:
             return
+        self.push_undo()
         self._cancel_anim()
         sq.rotation, sq.flip_h, sq.flip_v = 0.0, False, False
         self._draw_square(sq)
         self._notice("Rotation / miroir réinitialisés")
 
     def _toggle_lock(self):
-        sq = self.selected_square
-        if sq:
-            sq.locked = not sq.locked
+        squares = [s for s in self.squares if self._is_selected(s)]
+        if not squares:
+            return
+        self.push_undo()
+        lock = not squares[0].locked
+        for sq in squares:
+            sq.locked = lock
             self._draw_square(sq)
-            if self.ignore_locked and sq.locked:
-                self._select()
+        if self.ignore_locked and lock:
+            self._select()
 
     def _delete_selected(self):
-        sq, fd = self.selected_square, self.selected_folder
-        if sq:
-            if self.connecting_from is sq:
+        fd = self.selected_folder
+        squares = [s for s in self.squares if self._is_selected(s)]
+        if squares:
+            self.push_undo()
+            ids = {s.id for s in squares}
+            if self.connecting_from in squares:
                 self._cancel_connect()
-            self.delete(self._tag(sq))
-            self.squares = [s for s in self.squares if s.id != sq.id]
-            self.links = [l for l in self.links if sq.id not in (l.source_id, l.target_id)]
-            self._images.pop(sq.id, None)
-            self._photo_cache.pop(sq.id, None)
-            self._base_cache.pop(sq.id, None)
-            if self.hovered_square is sq:
+            for sq in squares:
+                self.delete(self._tag(sq))
+            self.squares = [s for s in self.squares if s.id not in ids]
+            self.links = [l for l in self.links
+                          if l.source_id not in ids and l.target_id not in ids]
+            for sq in squares:
+                self._images.pop(sq.id, None)
+                self._photo_cache.pop(sq.id, None)
+                self._base_cache.pop(sq.id, None)
+            if self.hovered_square in squares:
                 self.hovered_square = None
+            self.selected_square = None
+            self.selected_squares = []
+            self.selected_folder = None
+            self._notice(f"{len(squares)} carré(s) supprimé(s)")
         elif fd:
+            self.push_undo()
             for s in self._members(fd):
                 s.folder_id = None
                 self._draw_square(s)
@@ -1249,9 +1580,9 @@ class NodeCanvas(tk.Canvas):
             self.folders = [f for f in self.folders if f.id != fd.id]
             if self.hovered_folder is fd:
                 self.hovered_folder = None
+            self.selected_folder = None
         else:
             return
-        self.selected_square = self.selected_folder = None
         self._update_links()
 
     def toggle_background_lock(self):
@@ -1270,35 +1601,141 @@ class NodeCanvas(tk.Canvas):
             "locked": bool(getattr(self, "bg_locked", False)),
         }
 
-    def set_default_square_size(self):
+    def clear_links(self):
+        """Supprime tous les liens (annulable avec Ctrl+Z)."""
+        if not self.links:
+            self._notice("Aucun lien à supprimer")
+            return
+        from tkinter import messagebox
+        if not messagebox.askyesno("Supprimer les liens",
+                                   f"Supprimer les {len(self.links)} lien(s) ?",
+                                   parent=self.winfo_toplevel()):
+            return
+        self.push_undo()
+        self.links = []
+        self._update_links()
+        self._notice("Tous les liens ont été supprimés")
+
+    def set_bg_blocks_clicks(self, value):
+        self.bg_blocks_clicks = bool(value)
+        for var in ("_bg_block_var", "_bg_click_var"):
+            if hasattr(self, var):
+                getattr(self, var).set(self.bg_blocks_clicks)
+        self.save_settings()
+        self._notice("Fond cliquable" if self.bg_blocks_clicks else "Fond non cliquable")
+
+    def toggle_bg_blocks_clicks(self):
+        self.set_bg_blocks_clicks(not self.bg_blocks_clicks)
+
+    def set_link_color(self):
+        from dialogs import ask_color
+        color = ask_color(self.winfo_toplevel(), self.default_link_color)
+        if color:
+            self.default_link_color = color
+            for ln in self.links:
+                ln.color = color
+            self._update_links()
+            self.save_settings()
+
+    def save_settings(self):
+        data = _load_settings()
+        data.update({
+            "square_size": self.square_size,
+            "link_width": self.link_width,
+            "link_color": self.default_link_color,
+            "ask_name_on_create": bool(self.ask_name_on_create),
+            "ignore_locked": bool(self.ignore_locked),
+            "bg_blocks_clicks": bool(self.bg_blocks_clicks),
+            "undo_depth": self.undo_depth,
+            "default_square_color1": self.default_square_color1,
+            "default_square_color2": self.default_square_color2,
+            "default_square_name1": self.default_square_name1,
+            "default_square_name2": self.default_square_name2,
+        })
+        _save_settings(data)
+
+    def set_undo_depth(self):
         from dialogs import ask_string
-        value = ask_string(self.winfo_toplevel(), "Taille des carrés", "Taille par défaut (10 à 500) :", str(self.square_size))
+        value = ask_string(self.winfo_toplevel(), "Historique",
+                           "Nombre d'annulations (Ctrl+Z) :", str(self.undo_depth))
+        if value is None:
+            return
+        try:
+            depth = int(float(value))
+        except (ValueError, OverflowError):
+            return
+        self.undo_depth = max(1, min(500, depth))
+        del self._undo_stack[:max(0, len(self._undo_stack) - self.undo_depth)]
+        self.save_settings()
+
+    def set_square_size(self, all_squares=True):
+        """Fixe la taille des carrés : tous les carrés existants sont redimensionnés."""
+        from dialogs import ask_string
+        value = ask_string(self.winfo_toplevel(), "Taille des carrés",
+                           f"Taille des carrés ({MIN_SQUARE_SIZE} à {MAX_SQUARE_SIZE}) :",
+                           str(self.square_size))
         if value is None:
             return
         try:
             size = int(float(value))
         except (ValueError, OverflowError):
             return
-        self.square_size = max(10, min(500, size))
+        size = max(MIN_SQUARE_SIZE, min(MAX_SQUARE_SIZE, size))
+        self.square_size = size
+        if all_squares and self.squares:
+            self.push_undo()
+            for sq in self.squares:
+                cx, cy = sq.center()
+                sq.size = size
+                sq.x, sq.y = cx - size / 2, cy - size / 2      # le centre ne bouge pas
+            self._redraw()
+        self.save_settings()
+        self._notice(f"Taille des carrés : {size}")
+
+    def set_default_square_size(self):
+        self.set_square_size()
 
     def set_link_width(self):
         from dialogs import ask_string
-        value = ask_string(self.winfo_toplevel(), "Épaisseur des liens", "Largeur au survol (1 à 20) :", str(getattr(self, "link_width", 3)))
+        value = ask_string(self.winfo_toplevel(), "Épaisseur des liens",
+                           f"Épaisseur des liens ({MIN_LINK_WIDTH} à {MAX_LINK_WIDTH}) :",
+                           str(getattr(self, "link_width", 3)))
         if value is None:
             return
         try:
             width = int(float(value))
         except (ValueError, OverflowError):
             return
-        self.link_width = max(1, min(20, width))
+        width = max(MIN_LINK_WIDTH, min(MAX_LINK_WIDTH, width))
+        self.link_width = width
+        if self.links:
+            self.push_undo()
+            for ln in self.links:
+                ln.width = width               # appliqué à tous les liens
+        self._update_links()
+        self.save_settings()
+        self._notice(f"Épaisseur des liens : {width}")
+
+    def set_default_square_color(self, which):
+        from dialogs import ask_color
+        attr = "default_square_color1" if which == 1 else "default_square_color2"
+        color = ask_color(self.winfo_toplevel(), getattr(self, attr))
+        if color:
+            setattr(self, attr, color)
+            self.save_settings()
+
+    def set_default_square_name(self, which):
+        from dialogs import ask_string
+        attr = "default_square_name1" if which == 1 else "default_square_name2"
+        value = ask_string(self.winfo_toplevel(), f"Nom par défaut {which}",
+                           "Nom des carrés de ce preset :", getattr(self, attr))
+        if value is None:
+            return
+        setattr(self, attr, value.strip())
+        self.save_settings()
 
     def _change_link_color(self):
-        from dialogs import ask_color
-        color = ask_color(self.winfo_toplevel(), "#888888")
-        if color:
-            for ln in self.links:
-                ln.color = color
-            self._update_links()
+        self.set_link_color()
 
     def _rotate_background(self):
         if not self.background_image:

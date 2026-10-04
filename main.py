@@ -33,6 +33,17 @@ class NodeCanvasApp:
         file_menu.add_separator()
         file_menu.add_command(label="Quitter", command=self.root.quit)
 
+        edit_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Édition", menu=edit_menu)
+        edit_menu.add_command(label="Annuler (Ctrl+Z)", command=self.canvas.undo)
+        edit_menu.add_command(label="Rétablir (Ctrl+Maj+Z)", command=self.canvas.redo)
+        edit_menu.add_separator()
+        edit_menu.add_command(label="Copier les carrés (Ctrl+C)", command=self.canvas.copy_selected)
+        edit_menu.add_command(label="Coller les carrés (Ctrl+Maj+V)", command=self.canvas.paste_squares)
+        edit_menu.add_command(label="Tout sélectionner (Ctrl+A)", command=self.canvas.select_all_squares)
+        edit_menu.add_command(label="Supprimer tous les liens", command=self.canvas.clear_links)
+        edit_menu.add_command(label="Supprimer (Suppr)", command=self.canvas._delete_selected)
+
         bg_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Fond", menu=bg_menu)
         bg_menu.add_command(label="Charger image de fond", command=self._load_background)
@@ -44,8 +55,21 @@ class NodeCanvasApp:
 
         settings_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Réglages", menu=settings_menu)
-        settings_menu.add_command(label="Taille par défaut des carrés…", command=self.canvas.set_default_square_size)
-        settings_menu.add_command(label="Épaisseur des liens au survol…", command=self.canvas.set_link_width)
+        settings_menu.add_command(label="Taille des carrés…", command=self.canvas.set_square_size)
+        settings_menu.add_command(label="Épaisseur des liens…", command=self.canvas.set_link_width)
+        settings_menu.add_command(label="Couleur des liens…", command=self.canvas.set_link_color)
+        settings_menu.add_separator()
+        settings_menu.add_command(label="Couleur par défaut 1…", command=lambda: self.canvas.set_default_square_color(1))
+        settings_menu.add_command(label="Couleur par défaut 2…", command=lambda: self.canvas.set_default_square_color(2))
+        settings_menu.add_command(label="Nom par défaut 1…", command=lambda: self.canvas.set_default_square_name(1))
+        settings_menu.add_command(label="Nom par défaut 2…", command=lambda: self.canvas.set_default_square_name(2))
+        settings_menu.add_separator()
+        settings_menu.add_command(label="Annulations max (Ctrl+Z)…", command=self.canvas.set_undo_depth)
+        self._bg_block_var = tk.BooleanVar(value=self.canvas.bg_blocks_clicks)
+        self.canvas._bg_block_var = self._bg_block_var
+        settings_menu.add_checkbutton(label="Fond non cliquable",
+                                      variable=self._bg_block_var,
+                                      command=self.canvas.toggle_bg_blocks_clicks)
 
     def _refresh_recent_menu(self):
         self._recent_menu.delete(0, tk.END)

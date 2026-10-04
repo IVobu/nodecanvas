@@ -9,7 +9,7 @@ class Square:
         self.y = y
         self.size = size
         self.color = color
-        self.name = name or self.id
+        self.name = name
         self.folder_id = folder_id
         self.image_path = image_path
         self.locked = locked
@@ -50,11 +50,12 @@ class Square:
 
 
 class Link:
-    def __init__(self, source_id, target_id, color="#888888"):
+    def __init__(self, source_id, target_id, color="#888888", width=None):
         self.id = str(uuid.uuid4())[:8]
         self.source_id = source_id
         self.target_id = target_id
         self.color = color
+        self.width = width            # None = utiliser le réglage global
 
     def to_dict(self):
         return {
@@ -62,11 +63,13 @@ class Link:
             "source_id": self.source_id,
             "target_id": self.target_id,
             "color": self.color,
+            "width": self.width,
         }
 
     @classmethod
     def from_dict(cls, data):
-        ln = cls(data["source_id"], data["target_id"], data.get("color", "#888888"))
+        ln = cls(data["source_id"], data["target_id"], data.get("color", "#888888"),
+                 data.get("width"))
         ln.id = data["id"]
         return ln
 
