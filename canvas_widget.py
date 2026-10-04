@@ -92,7 +92,11 @@ class NodeCanvas(tk.Canvas):
 
         # --- vue ---
         self.zoom = 1.0
-        self.ask_name_on_create = bool(_load_settings().get("ask_name_on_create", False))
+        _settings = _load_settings()
+        self.ask_name_on_create = bool(_settings.get("ask_name_on_create", False))
+        self.square_size = int(_settings.get("square_size", 60))
+        self.link_width = int(_settings.get("link_width", 3))
+        self.default_link_color = _settings.get("link_color", "#888888")
         self.alt_down = False        # Alt maintenu : poignées de redimensionnement / rotation actives
         self._mouse = (0, 0)
         self.ignore_locked = False   # True : les éléments verrouillés laissent passer les clics

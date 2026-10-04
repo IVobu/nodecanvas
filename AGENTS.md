@@ -37,7 +37,7 @@ nodecanvas/
 - **Flip** : H = miroir horizontal, V = miroir vertical (par rapport à l'écran, même après rotation).
 - **Hit-test avec rotation** : déplacement, resize et rotation tiennent compte de l'angle du carré.
 - **Alt** : poignées de resize/rotation visibles et actives uniquement avec Alt. Setting "Demander le nom à la création" persisté dans `~/.nodecanvas_settings.json`.
-- **Paramètres persistés** : couleur des liens, taille des carrés, épaisseur des liens → sauvegardés dans le JSON.
+- **Paramètres persistés** : couleur des liens, taille des carrés, épaisseur des liens, ask_name_on_create → sauvegardés dans `~/.nodecanvas_settings.json` et chargés au démarrage.
 - **Zoom** : molette (0.1x–2.0x), Ctrl+0 = reset, menu "Affichage" → zoom avant/arrière/100%.
 - **Mode "Ignorer les verrous"** : Ctrl+L ou menu "Affichage" → les éléments verrouillés laissent passer les clics.
 - **Raccourcis clavier** : Suppr = supprimer, F2 = renommer, Échap = annuler connexion, Ctrl+V = coller, Ctrl+0 = zoom 100%.
