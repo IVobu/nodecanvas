@@ -114,6 +114,8 @@ class NodeCanvas(tk.Canvas):
         self.bg_y = 0
         self.bg_width = 0
         self.bg_height = 0
+        self.bg_locked = False
+        self.bg_rotation = 0.0
 
         # --- vue ---
         self.zoom = 1.0
@@ -132,6 +134,7 @@ class NodeCanvas(tk.Canvas):
         self._redo_stack = []
         self._clipboard = None
         self._marquee = None
+        self._grabbed = None         # objet dont la poignée est en cours de glissement
         self._snapshot_taken = False
         self._pending_preset = None
         self.handles_on = False       # R maintenu : poignées de redimensionnement / rotation actives
@@ -732,7 +735,7 @@ class NodeCanvas(tk.Canvas):
             self._draw_handles_for(fd)
 
     def _update_links(self):
-        """Tous les liens sont dessinés ; ceux du carré survolé sont mis en avant."""
+        """Liens du carré survolé, ou de tout le contenu d'un dossier fermé survolé."""
         self.delete("link")
         focus = set()
         h = self.hovered_square
@@ -740,21 +743,23 @@ class NodeCanvas(tk.Canvas):
             focus = {h.id}
         elif self.hovered_folder is not None and self.hovered_folder.collapsed:
             focus = {s.id for s in self._members(self.hovered_folder)}
+        if not focus:
+            return
         z = self.zoom
         for ln in self.links:
+            if ln.source_id not in focus and ln.target_id not in focus:
+                continue
             src, tgt = self._find_square(ln.source_id), self._find_square(ln.target_id)
             if not src or not tgt:
                 continue
             if src.folder_id and src.folder_id == tgt.folder_id and not self._visible(src):
                 continue   # lien interne à un dossier fermé
-            active = ln.source_id in focus or ln.target_id in focus
-            width = getattr(ln, "width", None) or self.link_width
-            if active:
-                width = min(MAX_LINK_WIDTH, width + 1)
+            width = max(MIN_LINK_WIDTH, min(MAX_LINK_WIDTH,
+                                            getattr(ln, "width", None) or self.link_width))
             x1, y1 = self._anchor(src)
             x2, y2 = self._anchor(tgt)
             self.create_line(x1 * z, y1 * z, x2 * z, y2 * z, fill=ln.color,
-                             width=max(MIN_LINK_WIDTH, width), tags="link")
+                             width=width, tags="link")
         self._place_links()
 
     # ------------------------------------------------------------------
@@ -1007,6 +1012,7 @@ class NodeCanvas(tk.Canvas):
                 elif kind == "rotate":
                     cx, cy = obj.center()
                     self._mode = "rotate"
+                    self._grabbed = obj                      # le carré dont on tire la poignée
                     self._rot_ref = (math.degrees(math.atan2(y - cy, x - cx)), getattr(obj, "rotation", 0.0))
                     self._cancel_anim()
                 else:
@@ -1015,7 +1021,7 @@ class NodeCanvas(tk.Canvas):
                     ox, oy = _rot(-obj.size / 2, -obj.size / 2, rot)
                     self._corner0 = (cx + ox, cy + oy)           # coin haut-gauche : reste fixe
                     self._anchor_pt = _rot(x - self._corner0[0], y - self._corner0[1], -rot)
-                    self._mode, self._orig = "resize", obj.size
+                    self._mode, self._orig, self._grabbed = "resize", obj.size, obj
                 return
 
         sq = self._square_at(x, y)
@@ -1042,8 +1048,9 @@ class NodeCanvas(tk.Canvas):
             self._update_marquee(x, y)
             return
         if self._bg_hit(x, y):
-            if self.bg_blocks_clicks:
-                self._notice("Fond non cliquable")
+            if self.bg_locked or self.bg_blocks_clicks:
+                self._notice("Fond verrouillé : inaltérable" if self.bg_locked
+                            else "Fond non cliquable")
                 return
             if self.handles_on and self._in_handle(x, y, self.bg_x + self.bg_width, self.bg_y + self.bg_height):
                 self._mode, self._anchor_pt = "bg_resize", (x, y)
@@ -1074,7 +1081,9 @@ class NodeCanvas(tk.Canvas):
             self._last = (x, y)
             self._update_links()
         elif mode == "resize":
-            sq = self.selected_square
+            sq = self._grabbed or self.selected_square
+            if sq is None:
+                return
             rot = getattr(sq, "rotation", 0.0)
             p0 = self._corner0
             ddx, ddy = _rot(x - p0[0], y - p0[1], -rot)
@@ -1088,11 +1097,15 @@ class NodeCanvas(tk.Canvas):
                 for other in self._movable_squares():      # toute la sélection prend la même taille
                     if other is sq or other.size == new:
                         continue
+                    ocx, ocy = other.center()              # les autres gardent leur centre
                     other.size = new
+                    other.x, other.y = ocx - new / 2, ocy - new / 2
                     self._draw_square(other, fast=True)
                 self._update_links()
         elif mode == "rotate":
-            sq = self.selected_square
+            sq = self._grabbed or self.selected_square
+            if sq is None:
+                return
             cx, cy = sq.center()
             a = math.degrees(math.atan2(y - cy, x - cx))
             r = self._snap_angle(self._rot_ref[1] + (a - self._rot_ref[0]),
@@ -1124,7 +1137,7 @@ class NodeCanvas(tk.Canvas):
             fd.h = max(FOLDER_MIN_H, self._orig[1] + y - self._anchor_pt[1])
             self._draw_folder(fd)
         elif mode == "bg_move":
-            if self.bg_blocks_clicks:
+            if self.bg_locked or self.bg_blocks_clicks:
                 return
             self.bg_x += dx
             self.bg_y += dy
@@ -1132,7 +1145,7 @@ class NodeCanvas(tk.Canvas):
             self.move("bg_handle", dx * z, dy * z)
             self._last = (x, y)
         elif mode == "bg_resize":
-            if self.bg_blocks_clicks:
+            if self.bg_locked or self.bg_blocks_clicks:
                 return
             self.bg_width = max(50, self._orig[0] + x - self._anchor_pt[0])
             self.bg_height = max(50, self._orig[1] + y - self._anchor_pt[1])
@@ -1144,6 +1157,7 @@ class NodeCanvas(tk.Canvas):
         x, y = self._pos(event)
         mode, self._mode = self._mode, None
         self._snapshot_taken = False
+        self._grabbed = None
 
         if mode == "marquee":
             self.delete("marquee")
@@ -1593,6 +1607,7 @@ class NodeCanvas(tk.Canvas):
             return
         self.bg_locked = not self.bg_locked
         self._redraw_background()
+        self._notice("Fond verrouillé : inaltérable" if self.bg_locked else "Fond déverrouillé")
 
     def get_background_state(self):
         return {
@@ -1742,6 +1757,9 @@ class NodeCanvas(tk.Canvas):
 
     def _rotate_background(self):
         if not self.background_image:
+            return
+        if self.bg_locked:
+            self._notice("Fond verrouillé : inaltérable")
             return
         from dialogs import ask_string
         value = ask_string(self.winfo_toplevel(), "Rotation du fond", "Angle en degrés :", str(getattr(self, "bg_rotation", 0)))
