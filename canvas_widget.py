@@ -102,6 +102,8 @@ class NodeCanvas(tk.Canvas):
         m.add_separator()
         m.add_command(label="Tourner image…", command=self._rotate_image)
         m.add_separator()
+        m.add_command(label="Changer couleur du lien…", command=self._change_link_color)
+        m.add_separator()
         m.add_command(label="Verrouiller/Déverrouiller", command=self._toggle_lock)
         m.add_separator()
         m.add_command(label="Supprimer", command=self._delete_selected)
@@ -867,12 +869,10 @@ class NodeCanvas(tk.Canvas):
     # Actions (menu contextuel / raccourcis)
     # ------------------------------------------------------------------
     def _add_square_at_cursor(self):
-        name = self._ask_name("Nouveau carré")
-        self.add_square(self.context_menu_x, self.context_menu_y, size=self.square_size, name=name or "")
+        self.add_square(self.context_menu_x, self.context_menu_y, size=self.square_size)
 
     def _add_folder_at_cursor(self):
-        title = self._ask_name("Nouveau dossier", "Dossier")
-        self.add_folder(self.context_menu_x, self.context_menu_y, title=title or "Dossier")
+        self.add_folder(self.context_menu_x, self.context_menu_y)
 
     def _selected(self):
         return self.selected_square or self.selected_folder
@@ -972,6 +972,18 @@ class NodeCanvas(tk.Canvas):
         except (ValueError, OverflowError):
             return
         self.link_width = max(1, min(20, width))
+
+    def _change_link_color(self):
+        sq = self.selected_square
+        if not sq:
+            return
+        from dialogs import ask_color
+        color = ask_color(self.winfo_toplevel(), "#888888")
+        if color:
+            for ln in self.links:
+                if sq.id in (ln.source_id, ln.target_id):
+                    ln.color = color
+            self._update_links()
 
     def _rotate_image(self):
         sq = self.selected_square
