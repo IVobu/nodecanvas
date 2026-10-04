@@ -246,8 +246,7 @@ class NodeCanvas(tk.Canvas):
         for key in ("v", "V"):
             self.bind(f"<Key-{key}>", lambda e: self.flip_selected(False))
         self.bind("<Key-0>", lambda e: self.reset_transform())
-        self.bind("<KeyPress>", self._on_key_press)
-        self._bind_quick_keys()         # 1 / 2 maintenues : carré au clic droit
+        self._bind_quick_keys()         # 1 / 2 : carré rapide au clic droit
         self.bind_all("<Alt-KeyPress>", lambda e: self._set_alt(True))
         self.bind_all("<Alt-KeyRelease>", lambda e: self._set_alt(False))
         self.bind("<Control-c>", lambda e: self.copy_selected())
@@ -325,11 +324,17 @@ class NodeCanvas(tk.Canvas):
         self._set_handles(False)
 
     def _setup_dnd(self):
-        if TKDND_AVAILABLE and hasattr(self, "drop_target_register"):
+        """Glisser-déposer de fichiers. Silently ignoré si la bibliothèque tkdnd
+        n'est pas chargée dans la fenêtre."""
+        if not TKDND_AVAILABLE or not hasattr(self, "drop_target_register"):
+            return
+        try:
             self.drop_target_register(DND_FILES)
             self.dnd_bind("<<Drop>>", self._on_drop)
             self.dnd_bind("<<DropEnter>>", lambda e: self.config(highlightbackground="#FFD700", highlightthickness=2))
             self.dnd_bind("<<DropLeave>>", lambda e: self.config(highlightthickness=0))
+        except tk.TclError:
+            pass        # fenêtre ouverte sans tkdnd : le reste de l'application fonctionne
 
     def _install_view_menu(self):
         """Ajoute un menu « Affichage » à la barre de menus existante (ou en crée une)."""
@@ -1401,10 +1406,6 @@ class NodeCanvas(tk.Canvas):
             return self.default_square_color1, self.default_square_name1
         return self.default_square_color2, self.default_square_name2
 
-    def _on_key_press(self, event):
-        """Les touches 1/2 sont traitées par _bind_quick_keys (appui + relâchement)."""
-        return
-
     def _create_square(self, x, y, color="#4A90D9", name=""):
         """Crée un carré ; s'il tombe dans un dossier ouvert, il en devient membre."""
         sq = self.add_square(x, y, size=self.square_size, color=color, name=name)
@@ -1788,9 +1789,6 @@ class NodeCanvas(tk.Canvas):
         self._notice(f"Taille des carrés : {size} ({scope})" if not skipped
                      else f"Taille des carrés : {size} ({scope}, {skipped} non modifié(s))")
 
-    def set_default_square_size(self):
-        self.set_square_size()
-
     def set_link_width(self):
         from dialogs import ask_string
         value = ask_string(self.winfo_toplevel(), "Épaisseur des liens",
@@ -1829,9 +1827,6 @@ class NodeCanvas(tk.Canvas):
             return
         setattr(self, attr, value.strip())
         self.save_settings()
-
-    def _change_link_color(self):
-        self.set_link_color()
 
     def _rotate_background(self):
         if not self.background_image:

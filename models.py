@@ -88,10 +88,6 @@ class Folder:
     def contains(self, px, py):
         return self.x <= px <= self.x + self.w and self.y <= py <= self.y + self.h
 
-    def header_contains(self, px, py):
-        header_h = 30
-        return self.x <= px <= self.x + self.w and self.y <= py <= self.y + header_h
-
     def to_dict(self):
         return {
             "id": self.id,

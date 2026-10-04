@@ -150,8 +150,8 @@ class NodeCanvasApp:
 if __name__ == "__main__":
     try:
         from tkinterdnd2 import TkinterDnD
-        root = TkinterDnD.Tk()
-    except ImportError:
-        root = tk.Tk()
-    app = NodeCanvasApp(root)
+        root = TkinterDnD.Tk()      # supporte le glisser-déposer de fichiers
+    except Exception:
+        root = tk.Tk()             # sans tkinterdnd2 : l'application reste utilisable
+    NodeCanvasApp(root)
     root.mainloop()

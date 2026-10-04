@@ -10,6 +10,10 @@ agents.md
 .cursor/
 .copilot/
 
+# Images collees depuis le presse-papier (generees a l'execution)
+/assets/
+nodecanvas_settings.json
+
 # C extensions
 *.so
 
