@@ -8,7 +8,7 @@ class Square:
         self.y = y
         self.size = size
         self.color = color
-        self.name = name or self.id
+        self.name = name
         self.folder_id = folder_id
         self.image_path = image_path
         self.locked = locked
