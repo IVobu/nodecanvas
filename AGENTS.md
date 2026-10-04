@@ -40,6 +40,7 @@ nodecanvas/
 - Pan : clic molette (scan_mark/scan_dragto) — les clics sont convertis en coordonnées canvas (`canvasx/canvasy`), donc pas de décalage.
 - Export/Import JSON manuel (pas d'auto-save).
 - **Performance** : rendu incrémental (Canvas.move) + tags préfixés (sq_, fd_) + zoom avec coordonnées monde/écran.
+- **Ordre de pile** : images libres < dossiers < carrés (hit-test et rendu cohérents).
 
 ## 5. BUGS CONNUS (priorité d'intervention)
 | # | Bug | Statut |

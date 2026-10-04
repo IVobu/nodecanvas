@@ -55,7 +55,6 @@ class NodeCanvas(tk.Canvas):
         self.bg_y = 0
         self.bg_width = 0
         self.bg_height = 0
-        self.bg_rotation = 0
 
         # --- vue ---
         self.zoom = 1.0
@@ -202,31 +201,43 @@ class NodeCanvas(tk.Canvas):
                 return sq
         return None
 
-    def _ordered(self):
-        """Ordre d'empilement : les images sous les carrés ordinaires (stable)."""
-        return sorted(self.squares, key=lambda s: 0 if s.image_path else 1)
+    def _is_free_image(self, sq):
+        return bool(sq.image_path) and not sq.folder_id
 
-    def _square_at(self, x, y):
-        for sq in reversed(self._ordered()):
-            if not self._visible(sq):
-                continue
-            if self.ignore_locked and sq.locked:
-                continue
-            if sq.contains(x, y):
-                return sq
-        return None
+    def _stack(self):
+        """Objets du bas vers le haut : images libres < dossiers < carrés (et images rangées dans un dossier)."""
+        free = [s for s in self.squares if self._is_free_image(s)]
+        top = [s for s in self.squares if not self._is_free_image(s)]
+        return free + list(self.folders) + top
 
     def _folder_rect(self, fd):
         if fd.collapsed:
             return fd.x - 22, fd.y, fd.x + ICON_W + 22, fd.y + ICON_H + 24
         return fd.x, fd.y, fd.x + fd.w, fd.y + fd.h
 
-    def _folder_at(self, x, y):
-        for fd in reversed(self.folders):
-            x1, y1, x2, y2 = self._folder_rect(fd)
-            if x1 <= x <= x2 and y1 <= y <= y2:
-                return fd
+    def _hit(self, x, y):
+        """Objet le plus haut sous le point (même pile que l'affichage)."""
+        for obj in reversed(self._stack()):
+            if isinstance(obj, Square):
+                if not self._visible(obj):
+                    continue
+                if self.ignore_locked and obj.locked:
+                    continue
+                if obj.contains(x, y):
+                    return obj
+            else:
+                x1, y1, x2, y2 = self._folder_rect(obj)
+                if x1 <= x <= x2 and y1 <= y <= y2:
+                    return obj
         return None
+
+    def _square_at(self, x, y):
+        obj = self._hit(x, y)
+        return obj if isinstance(obj, Square) else None
+
+    def _folder_at(self, x, y):
+        obj = self._hit(x, y)
+        return obj if isinstance(obj, Folder) else None
 
     def _anchor(self, sq):
         """Point d'attache d'un lien : le carré, ou l'icône de son dossier s'il est fermé."""
@@ -237,7 +248,6 @@ class NodeCanvas(tk.Canvas):
         return sq.center()
 
     def _restack(self):
-        self.tag_lower("folder")
         self.tag_lower("background")
 
     def _ask_name(self, title, initial=""):
@@ -358,10 +368,11 @@ class NodeCanvas(tk.Canvas):
         self.delete("all")
         self.connect_line = None
         self._redraw_background(fast)
-        for fd in self.folders:
-            self._draw_folder(fd)
-        for sq in self._ordered():
-            self._draw_square(sq, fast, keep_order=False)
+        for obj in self._stack():
+            if isinstance(obj, Square):
+                self._draw_square(obj, fast, keep_order=False)
+            else:
+                self._draw_folder(obj, keep_order=False)
         self._update_links()
         self._restack()
         if self.connecting_from is not None:
@@ -400,25 +411,43 @@ class NodeCanvas(tk.Canvas):
         if keep_order:
             self._restore_order(sq)
 
-    def _restore_order(self, sq):
-        """Un carré redessiné reprend sa place dans la pile (il ne saute plus devant)."""
-        order = self._ordered()
+    def _restore_order(self, obj):
+        """Un objet redessiné reprend sa place dans la pile (il ne saute plus devant)."""
+        stack = self._stack()
         try:
-            i = order.index(sq)
+            i = stack.index(obj)
         except ValueError:
             return
-        mine = self._tag(sq)
+        mine = self._tag(obj)
         if not self.find_withtag(mine):
             return
-        for nxt in order[i + 1:]:
+        placed = False
+        for nxt in stack[i + 1:]:
             t = self._tag(nxt)
             if self.find_withtag(t):
                 self.tag_lower(mine, t)
-                return
+                placed = True
+                break
+        if not placed:
+            self.tag_raise(mine)
+        self.tag_lower("background")
+        self._place_links()
         if self.connect_line:
             self.tag_raise(self.connect_line)
 
-    def _draw_folder(self, fd):
+    def _place_links(self):
+        """Les liens passent au-dessus des images et dossiers, sous les carrés."""
+        if not self.find_withtag("link"):
+            return
+        for obj in self._stack():
+            if isinstance(obj, Square) and not self._is_free_image(obj):
+                t = self._tag(obj)
+                if self.find_withtag(t):
+                    self.tag_lower("link", t)
+                    return
+        self.tag_raise("link")
+
+    def _draw_folder(self, fd, keep_order=True):
         z = self.zoom
         tag = self._tag(fd)
         self.delete(tag)
@@ -451,8 +480,8 @@ class NodeCanvas(tk.Canvas):
                                  anchor="w", font=f, tags=tags)
             hh = min(HANDLE, (x2 - x1) / 2)
             self.create_rectangle(x2 - hh, y2 - hh, x2, y2, fill=LOCK_COLOR, outline="#FFFFFF", width=1, tags=tags)
-        self.tag_lower(tag)
-        self.tag_lower("background")
+        if keep_order:
+            self._restore_order(fd)
 
     def _update_links(self):
         """Liens du carré survolé, ou de tout le contenu d'un dossier fermé survolé."""
@@ -477,10 +506,7 @@ class NodeCanvas(tk.Canvas):
             x1, y1 = self._anchor(src)
             x2, y2 = self._anchor(tgt)
             self.create_line(x1 * z, y1 * z, x2 * z, y2 * z, fill=ln.color, width=3, tags="link")
-        try:
-            self.tag_lower("link", "square")
-        except tk.TclError:
-            pass
+        self._place_links()
 
     # ------------------------------------------------------------------
     # Images (carrés)
@@ -578,6 +604,7 @@ class NodeCanvas(tk.Canvas):
         self.bg_photo = None
         self.bg_x = self.bg_y = 0
         self.bg_width = self.bg_height = 0
+        self.bg_rotation = 0
         if not filepath or not PIL_AVAILABLE:
             return
         try:
@@ -601,7 +628,7 @@ class NodeCanvas(tk.Canvas):
         img = self.bg_original
         if size != img.size:
             img = img.resize(size, Image.NEAREST if fast else Image.LANCZOS)
-        if self.bg_rotation:
+        if getattr(self, "bg_rotation", 0):
             img = img.rotate(-self.bg_rotation, expand=True, resample=Image.BICUBIC)
         self.bg_photo = ImageTk.PhotoImage(img)
         self.create_image(self.bg_x * z, self.bg_y * z, image=self.bg_photo, anchor="nw", tags="background")
@@ -831,16 +858,21 @@ class NodeCanvas(tk.Canvas):
             if not fd.collapsed and fd.contains(cx, cy):
                 target = fd
                 break
-        sq.folder_id = target.id if target else None
+        new_id = target.id if target else None
+        if new_id != sq.folder_id:
+            sq.folder_id = new_id
+            self._restore_order(sq)
 
     # ------------------------------------------------------------------
     # Actions (menu contextuel / raccourcis)
     # ------------------------------------------------------------------
     def _add_square_at_cursor(self):
-        self.add_square(self.context_menu_x, self.context_menu_y, size=self.square_size)
+        name = self._ask_name("Nouveau carré")
+        self.add_square(self.context_menu_x, self.context_menu_y, size=self.square_size, name=name or "")
 
     def _add_folder_at_cursor(self):
-        self.add_folder(self.context_menu_x, self.context_menu_y)
+        title = self._ask_name("Nouveau dossier", "Dossier")
+        self.add_folder(self.context_menu_x, self.context_menu_y, title=title or "Dossier")
 
     def _selected(self):
         return self.selected_square or self.selected_folder
@@ -868,36 +900,6 @@ class NodeCanvas(tk.Canvas):
             else:
                 obj.title = name
                 self._draw_folder(obj)
-
-    def _rotate_image(self):
-        sq = self.selected_square
-        if not sq or not sq.image_path:
-            return
-        from dialogs import ask_string
-        value = ask_string(self.winfo_toplevel(), "Rotation", "Angle en degrés :", str(sq.rotation))
-        if value is None:
-            return
-        try:
-            angle = float(value)
-        except (ValueError, OverflowError):
-            return
-        sq.rotation = angle % 360
-        self._photo_cache.pop(sq.id, None)
-        self._draw_square(sq)
-
-    def _rotate_background(self):
-        if not self.background_image:
-            return
-        from dialogs import ask_string
-        value = ask_string(self.winfo_toplevel(), "Rotation du fond", "Angle en degrés :", str(self.bg_rotation))
-        if value is None:
-            return
-        try:
-            angle = float(value)
-        except (ValueError, OverflowError):
-            return
-        self.bg_rotation = angle % 360
-        self._redraw_background()
 
     def _toggle_lock(self):
         sq = self.selected_square
@@ -970,3 +972,33 @@ class NodeCanvas(tk.Canvas):
         except (ValueError, OverflowError):
             return
         self.link_width = max(1, min(20, width))
+
+    def _rotate_image(self):
+        sq = self.selected_square
+        if not sq or not sq.image_path:
+            return
+        from dialogs import ask_string
+        value = ask_string(self.winfo_toplevel(), "Rotation", "Angle en degrés :", str(sq.rotation))
+        if value is None:
+            return
+        try:
+            angle = float(value)
+        except (ValueError, OverflowError):
+            return
+        sq.rotation = angle % 360
+        self._photo_cache.pop(sq.id, None)
+        self._draw_square(sq)
+
+    def _rotate_background(self):
+        if not self.background_image:
+            return
+        from dialogs import ask_string
+        value = ask_string(self.winfo_toplevel(), "Rotation du fond", "Angle en degrés :", str(getattr(self, "bg_rotation", 0)))
+        if value is None:
+            return
+        try:
+            angle = float(value)
+        except (ValueError, OverflowError):
+            return
+        self.bg_rotation = angle % 360
+        self._redraw_background()
