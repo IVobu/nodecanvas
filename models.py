@@ -1,9 +1,16 @@
 import uuid
 
 
+def _clamp_opacity(value):
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return 1.0
+
+
 class Square:
     def __init__(self, x, y, size=60, color="#4A90D9", name="", folder_id=None, image_path=None,
-                 locked=False, rotation=0.0, flip_h=False, flip_v=False):
+                 locked=False, rotation=0.0, flip_h=False, flip_v=False, opacity=1.0):
         self.id = str(uuid.uuid4())[:8]
         self.x = x
         self.y = y
@@ -16,6 +23,7 @@ class Square:
         self.rotation = rotation      # degrés, sens horaire, autour du centre
         self.flip_h = flip_h          # miroir de l'image (dans son propre repère)
         self.flip_v = flip_v
+        self.opacity = _clamp_opacity(opacity)    # 1.0 = opaque (voir opacity.py)
 
     def contains(self, px, py):
         return self.x <= px <= self.x + self.size and self.y <= py <= self.y + self.size
@@ -24,7 +32,7 @@ class Square:
         return (self.x + self.size / 2, self.y + self.size / 2)
 
     def to_dict(self):
-        return {
+        data = {
             "id": self.id,
             "x": self.x,
             "y": self.y,
@@ -38,13 +46,17 @@ class Square:
             "flip_h": self.flip_h,
             "flip_v": self.flip_v,
         }
+        if self.opacity < 0.999:      # absent quand le carré est opaque : JSON allégé
+            data["opacity"] = round(self.opacity, 3)
+        return data
 
     @classmethod
     def from_dict(cls, data):
         sq = cls(data["x"], data["y"], data.get("size", 60), data.get("color", "#4A90D9"),
                  data.get("name", ""), data.get("folder_id"), data.get("image_path"),
                  data.get("locked", False), data.get("rotation", 0.0),
-                 data.get("flip_h", False), data.get("flip_v", False))
+                 data.get("flip_h", False), data.get("flip_v", False),
+                 data.get("opacity", 1.0))
         sq.id = data["id"]
         return sq
 

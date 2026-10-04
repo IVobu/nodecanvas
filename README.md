@@ -15,6 +15,7 @@ Application de bureau Python/Tkinter pour créer des carrés colorés, les relie
 - **Image de fond** : chargé, redimensionné, tourné, verrouillé, ou rendu non cliquable
 - **Zoom et panoramique** : molette pour zoomer, bouton du milieu pour déplacer la vue
 - **Carrés rapides** : maintenir `1` ou `2` puis clic droit pour créer un carré prédéfini
+- **Opacité des carrés** : `+` / `-` pour le carré survolé, `Maj` pour la sélection, `Ctrl` pour tous ; de 10 % à 100 %, pas réglable
 - **Sauvegarde JSON** : export / import, avec menu des fichiers récents
 - **Réglages persistants** : tout est enregistré dans `~/.nodecanvas_settings.json`
 
@@ -50,6 +51,9 @@ python main.py
 | Réinitialiser rotation / miroir | `0` |
 | Miroir horizontal / vertical | `H` / `V` |
 | Renommer | `F2` |
+| Opacité du carré survolé | `+` / `-` (ou pavé, Page Haut / Page Bas) |
+| Opacité de la sélection | `Maj` + `+` / `-` |
+| Opacité de tous les carrés | `Ctrl` + `+` / `-` |
 | Supprimer | `Suppr` |
 | Copier / coller des carrés | `Ctrl+C` / `Ctrl+Maj+V` |
 | Coller une image | `Ctrl+V` |
@@ -66,6 +70,7 @@ python main.py
 nodecanvas/
 ├── main.py              # Point d'entrée et menus
 ├── canvas_widget.py     # Canvas Tkinter, interactions, réglages
+├── opacity.py           # Opacité des carrés (installé par main.py)
 ├── models.py            # Classes Square, Link, Folder
 ├── storage.py           # Export / import JSON
 ├── dialogs.py           # Dialogues de saisie

@@ -2,6 +2,7 @@ import json
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
+import opacity
 from canvas_widget import NodeCanvas, _load_settings, _save_settings
 from storage import export_json, import_json
 
@@ -15,6 +16,7 @@ class NodeCanvasApp:
 
         self.canvas = NodeCanvas(self.root, width=1200, height=800)
         self.canvas.pack(fill=tk.BOTH, expand=True)
+        self.opacity = opacity.install(self.canvas)
 
         self._build_menu()
 
@@ -58,6 +60,12 @@ class NodeCanvasApp:
         settings_menu.add_command(label="Taille des carrés…", command=self.canvas.set_square_size)
         settings_menu.add_command(label="Épaisseur des liens…", command=self.canvas.set_link_width)
         settings_menu.add_command(label="Couleur des liens…", command=self.canvas.set_link_color)
+        settings_menu.add_separator()
+        settings_menu.add_command(label="Opacité : pas…", command=self.canvas.set_opacity_step)
+        settings_menu.add_command(label="Opacité de la sélection…", command=self.canvas.ask_opacity)
+        settings_menu.add_command(label="Opacité de tous les carrés…", command=self.canvas.ask_opacity_all)
+        settings_menu.add_command(label="Rétablir l'opacité de la sélection (100 %)",
+                                  command=self.canvas.reset_opacity)
         settings_menu.add_separator()
         settings_menu.add_command(label="Carré rapide 1 (touche 1 + clic droit) : couleur…",
                                   command=lambda: self.canvas.set_default_square_color(1))
