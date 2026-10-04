@@ -33,9 +33,10 @@ nodecanvas/
 - Fond : menu "Fond" → charger/retirer/**verrouiller-déverrouiller** ; drag + handle visible en bas-droite (carré doré) ; état (x,y,w,h,locked) sauvegardé en JSON. Le verrou bloque drag/resize (contour doré pointillé).
 - Réglages : menu "Réglages" → taille par défaut des carrés (10-500), épaisseur des liens au survol (1-20).
 - Images : drop depuis l'explorateur (png/jpg/gif/bmp/**webp**), Ctrl+V presse-papiers (sauvegarde dans assets/), images redimensionnées dynamiquement avec le carré.
-- **Rotation** : poignée de rotation au-dessus du carré sélectionné (drag), R/Maj+R = ±90° (avec animation), 0 = réinitialiser. Aimantation 45°, Maj = pas 15°.
+- **Rotation** : poignée de rotation au-dessus du carré sélectionné (drag, visible avec Alt), R/Maj+R = ±90° (avec animation), 0 = réinitialiser. Aimantation 45°, Maj = pas 15°.
 - **Flip** : H = miroir horizontal, V = miroir vertical (par rapport à l'écran, même après rotation).
 - **Hit-test avec rotation** : déplacement, resize et rotation tiennent compte de l'angle du carré.
+- **Alt** : poignées de resize/rotation visibles et actives uniquement avec Alt. Setting "Demander le nom à la création" persisté dans `~/.nodecanvas_settings.json`.
 - **Paramètres persistés** : couleur des liens, taille des carrés, épaisseur des liens → sauvegardés dans le JSON.
 - **Zoom** : molette (0.1x–2.0x), Ctrl+0 = reset, menu "Affichage" → zoom avant/arrière/100%.
 - **Mode "Ignorer les verrous"** : Ctrl+L ou menu "Affichage" → les éléments verrouillés laissent passer les clics.

@@ -5,8 +5,10 @@
 - Ordre d'empilement stable : fond < dossiers < liens < images < carrés.
 - Les tags sont préfixés (un id 100 % numérique serait pris pour un item Tk).
 """
+import json
 import math
 import os
+import sys
 import uuid
 import tkinter as tk
 
@@ -43,6 +45,26 @@ SELECT_COLOR = "#4FC3F7"
 LOCK_COLOR = "#FFD700"
 
 
+SETTINGS_PATH = os.path.join(os.path.expanduser("~"), ".nodecanvas_settings.json")
+
+
+def _load_settings():
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_settings(data):
+    try:
+        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except OSError:
+        pass
+
+
 def _rot(dx, dy, deg):
     """Tourne le vecteur (dx, dy) de `deg` degrés dans le sens horaire (écran, y vers le bas)."""
     a = math.radians(deg)
@@ -67,10 +89,12 @@ class NodeCanvas(tk.Canvas):
         self.bg_y = 0
         self.bg_width = 0
         self.bg_height = 0
-        self.bg_rotation = 0
 
         # --- vue ---
         self.zoom = 1.0
+        self.ask_name_on_create = bool(_load_settings().get("ask_name_on_create", False))
+        self.alt_down = False        # Alt maintenu : poignées de redimensionnement / rotation actives
+        self._mouse = (0, 0)
         self.ignore_locked = False   # True : les éléments verrouillés laissent passer les clics
 
         # --- interaction ---
@@ -139,6 +163,13 @@ class NodeCanvas(tk.Canvas):
         self.bind("<Motion>", self._on_motion)
         self.bind("<Enter>", lambda e: self.focus_set())
         self.bind("<Leave>", self._on_leave)
+        self.bind("<FocusOut>", lambda e: self._set_alt(False))
+        for key in ("Alt_L", "Alt_R", "Meta_L", "Meta_R", "Option_L", "Option_R"):
+            try:
+                self.bind_all(f"<KeyPress-{key}>", lambda e: self._set_alt(True))
+                self.bind_all(f"<KeyRelease-{key}>", lambda e: self._set_alt(False))
+            except tk.TclError:      # keysym inconnu sur cette plateforme
+                pass
         self.bind("<MouseWheel>", self._on_wheel)       # Windows / macOS
         self.bind("<Button-4>", self._on_wheel)         # Linux
         self.bind("<Button-5>", self._on_wheel)
@@ -177,6 +208,9 @@ class NodeCanvas(tk.Canvas):
             vm = tk.Menu(menubar, tearoff=0)
             vm.add_checkbutton(label="Ignorer les éléments verrouillés (Ctrl+L)",
                                variable=self._ignore_var, command=self._on_ignore_menu)
+            self._ask_var = tk.BooleanVar(value=self.ask_name_on_create)
+            vm.add_checkbutton(label="Demander le nom à la création",
+                               variable=self._ask_var, command=self._on_ask_name_menu)
             vm.add_separator()
             vm.add_command(label="Zoom avant", command=lambda: self._zoom_center(1.25))
             vm.add_command(label="Zoom arrière", command=lambda: self._zoom_center(0.8))
@@ -269,6 +303,86 @@ class NodeCanvas(tk.Canvas):
     def _over_rot_handle(self, sq, x, y):
         hx, hy = self._rot_handle_pos(sq)
         return math.hypot(x - hx, y - hy) <= ROT_HIT / self.zoom
+
+    # --- Alt : poignées de redimensionnement / rotation -----------------
+    def _alt(self, event):
+        """Alt est-il enfoncé ? (suivi des touches + bit d'état de l'événement souris)"""
+        if self.alt_down:
+            return True
+        st = getattr(event, "state", 0)
+        if sys.platform.startswith("win"):
+            return bool(st & 0x20000)
+        if sys.platform == "darwin":
+            return bool(st & 0x10)
+        return bool(st & 0x8)
+
+    def _set_alt(self, value):
+        value = bool(value)
+        if value == self.alt_down:
+            return
+        self.alt_down = value
+        self._refresh_handles()
+        self._update_cursor(*self._mouse)
+
+    def _refresh_handles(self):
+        self.delete("handle")
+        if not self.alt_down:
+            return
+        for obj in self._stack():
+            self._draw_handles_for(obj)
+        self._draw_bg_handle()
+
+    def _draw_handles_for(self, obj):
+        z = self.zoom
+        tags = ("handle", self._tag(obj))
+        if isinstance(obj, Square):
+            if obj.locked or not self._visible(obj):
+                return
+            rot = getattr(obj, "rotation", 0.0)
+            cx, cy = obj.center()
+            cx, cy, hs = cx * z, cy * z, obj.size * z / 2
+
+            def P(lx, ly):
+                ox, oy = _rot(lx, ly, rot)
+                return cx + ox, cy + oy
+
+            h = min(HANDLE, hs)
+            pts = [v for p in (P(hs - h, hs - h), P(hs, hs - h), P(hs, hs), P(hs - h, hs)) for v in p]
+            self.create_polygon(pts, fill=LOCK_COLOR, outline="#FFFFFF", width=1, tags=tags)
+            x0, y0 = P(0, -hs)
+            hx, hy = P(0, -hs - ROT_HANDLE_DIST)
+            self.create_line(x0, y0, hx, hy, fill=SELECT_COLOR, width=2, tags=tags)
+            self.create_oval(hx - 6, hy - 6, hx + 6, hy + 6, fill="#FFFFFF", outline=SELECT_COLOR,
+                             width=2, tags=tags)
+        elif not obj.collapsed:
+            x2, y2 = (obj.x + obj.w) * z, (obj.y + obj.h) * z
+            hh = min(HANDLE, obj.w * z / 2)
+            self.create_rectangle(x2 - hh, y2 - hh, x2, y2, fill=LOCK_COLOR, outline="#FFFFFF",
+                                  width=1, tags=tags)
+
+    def _draw_bg_handle(self):
+        self.delete("bg_handle")
+        if not self.alt_down or self.bg_original is None:
+            return
+        z = self.zoom
+        x2, y2 = (self.bg_x + self.bg_width) * z, (self.bg_y + self.bg_height) * z
+        hh = min(HANDLE, self.bg_width * z / 2)
+        self.create_rectangle(x2 - hh, y2 - hh, x2, y2, fill=LOCK_COLOR, outline="#FFFFFF",
+                              width=1, tags=("handle", "bg_handle"))
+
+    def _handle_at(self, x, y):
+        """Poignée visible (Alt) sous la souris : (objet, 'rotate' | 'resize' | 'folder_resize')."""
+        for obj in reversed(self._stack()):
+            if isinstance(obj, Square):
+                if obj.locked or not self._visible(obj):
+                    continue
+                if self._over_rot_handle(obj, x, y):
+                    return obj, "rotate"
+                if self._over_resize(obj, x, y):
+                    return obj, "resize"
+            elif not obj.collapsed and self._in_handle(x, y, obj.x + obj.w, obj.y + obj.h):
+                return obj, "folder_resize"
+        return None
 
     def _hit(self, x, y):
         """Objet le plus haut sous le point (même pile que l'affichage)."""
@@ -384,6 +498,12 @@ class NodeCanvas(tk.Canvas):
             self._ignore_var.set(self.ignore_locked)
         self._after_ignore_change()
 
+    def _on_ask_name_menu(self):
+        self.ask_name_on_create = bool(self._ask_var.get())
+        data = _load_settings()
+        data["ask_name_on_create"] = self.ask_name_on_create
+        _save_settings(data)
+
     def _on_ignore_menu(self):
         self.ignore_locked = bool(self._ignore_var.get())
         self._after_ignore_change()
@@ -423,6 +543,7 @@ class NodeCanvas(tk.Canvas):
                 self._draw_folder(obj, keep_order=False)
         self._update_links()
         self._restack()
+        self._refresh_handles()
         if self.connecting_from is not None:
             self._start_connect_line(self.connecting_from)
 
@@ -462,18 +583,10 @@ class NodeCanvas(tk.Canvas):
                 opts = {"angle": -rot} if rot else {}
                 self.create_text(cx, cy, text=sq.name, fill="#FFFFFF", font=font,
                                  width=max(int(sq.size * z) - 6, 10), tags=tags, **opts)
-        if not sq.locked:
-            h = min(HANDLE, hs)
-            pts = [v for p in (P(hs - h, hs - h), P(hs, hs - h), P(hs, hs), P(hs - h, hs)) for v in p]
-            self.create_polygon(pts, fill=LOCK_COLOR, outline="#FFFFFF", width=1, tags=tags)
-            if sq is self.selected_square:      # poignée de rotation au-dessus du bord haut
-                x0, y0 = P(0, -hs)
-                hx, hy = P(0, -hs - ROT_HANDLE_DIST)
-                self.create_line(x0, y0, hx, hy, fill=SELECT_COLOR, width=2, tags=tags)
-                self.create_oval(hx - 6, hy - 6, hx + 6, hy + 6, fill="#FFFFFF",
-                                 outline=SELECT_COLOR, width=2, tags=tags)
         if keep_order:
             self._restore_order(sq)
+        if self.alt_down:
+            self._draw_handles_for(sq)
 
     def _restore_order(self, obj):
         """Un objet redessiné reprend sa place dans la pile (il ne saute plus devant)."""
@@ -542,10 +655,10 @@ class NodeCanvas(tk.Canvas):
             if f:
                 self.create_text(x1 + 10 * z, y1 + HEADER_H * z / 2, text=f"- {fd.title}", fill="#333333",
                                  anchor="w", font=f, tags=tags)
-            hh = min(HANDLE, (x2 - x1) / 2)
-            self.create_rectangle(x2 - hh, y2 - hh, x2, y2, fill=LOCK_COLOR, outline="#FFFFFF", width=1, tags=tags)
         if keep_order:
             self._restore_order(fd)
+        if self.alt_down:
+            self._draw_handles_for(fd)
 
     def _update_links(self):
         """Liens du carré survolé, ou de tout le contenu d'un dossier fermé survolé."""
@@ -681,7 +794,6 @@ class NodeCanvas(tk.Canvas):
         self.bg_photo = None
         self.bg_x = self.bg_y = 0
         self.bg_width = self.bg_height = 0
-        self.bg_rotation = 0
         if not filepath or not PIL_AVAILABLE:
             return
         try:
@@ -698,6 +810,7 @@ class NodeCanvas(tk.Canvas):
 
     def _redraw_background(self, fast=False):
         self.delete("background")
+        self.delete("bg_handle")
         if self.bg_original is None:
             return
         z = self.zoom
@@ -708,6 +821,7 @@ class NodeCanvas(tk.Canvas):
         self.bg_photo = ImageTk.PhotoImage(img)
         self.create_image(self.bg_x * z, self.bg_y * z, image=self.bg_photo, anchor="nw", tags="background")
         self.tag_lower("background")
+        self._draw_bg_handle()
 
     def _bg_hit(self, x, y):
         return (self.bg_original is not None
@@ -749,41 +863,47 @@ class NodeCanvas(tk.Canvas):
                 self._update_links()
             return
 
-        sel = self.selected_square
-        if sel is not None and not sel.locked and self._visible(sel) and self._over_rot_handle(sel, x, y):
-            cx, cy = sel.center()
-            self._mode = "rotate"
-            self._rot_ref = (math.degrees(math.atan2(y - cy, x - cx)), getattr(sel, "rotation", 0.0))
-            self._cancel_anim()
-            return
+        alt = self._alt(event)
+        if alt:                                   # poignées : uniquement avec Alt
+            hit = self._handle_at(x, y)
+            if hit:
+                obj, kind = hit
+                if kind == "folder_resize":
+                    self._select(fd=obj)
+                    self._mode, self._anchor_pt, self._orig = "folder_resize", (x, y), (obj.w, obj.h)
+                elif kind == "rotate":
+                    self._select(sq=obj)
+                    cx, cy = obj.center()
+                    self._mode = "rotate"
+                    self._rot_ref = (math.degrees(math.atan2(y - cy, x - cx)), getattr(obj, "rotation", 0.0))
+                    self._cancel_anim()
+                else:
+                    self._select(sq=obj)
+                    rot = getattr(obj, "rotation", 0.0)
+                    cx, cy = obj.center()
+                    ox, oy = _rot(-obj.size / 2, -obj.size / 2, rot)
+                    self._corner0 = (cx + ox, cy + oy)           # coin haut-gauche : reste fixe
+                    self._anchor_pt = _rot(x - self._corner0[0], y - self._corner0[1], -rot)
+                    self._mode, self._orig = "resize", obj.size
+                return
 
         sq = self._square_at(x, y)
         if sq:
             self._select(sq=sq)
             if not sq.locked:
-                if self._over_resize(sq, x, y):
-                    rot = getattr(sq, "rotation", 0.0)
-                    cx, cy = sq.center()
-                    ox, oy = _rot(-sq.size / 2, -sq.size / 2, rot)
-                    self._corner0 = (cx + ox, cy + oy)           # coin haut-gauche : reste fixe
-                    self._anchor_pt = _rot(x - self._corner0[0], y - self._corner0[1], -rot)
-                    self._mode, self._orig = "resize", sq.size
-                else:
-                    self._mode, self._last = "move", (x, y)
+                self._mode, self._last = "move", (x, y)
             return
 
         fd = self._folder_at(x, y)
         if fd:
             self._select(fd=fd)
-            if not fd.collapsed and self._in_handle(x, y, fd.x + fd.w, fd.y + fd.h):
-                self._mode, self._anchor_pt, self._orig = "folder_resize", (x, y), (fd.w, fd.h)
-            elif fd.collapsed or y <= fd.y + HEADER_H:
+            if fd.collapsed or y <= fd.y + HEADER_H:
                 self._mode, self._last = "folder", (x, y)
             return
 
         self._select()
         if self._bg_hit(x, y):
-            if self._in_handle(x, y, self.bg_x + self.bg_width, self.bg_y + self.bg_height):
+            if alt and self._in_handle(x, y, self.bg_x + self.bg_width, self.bg_y + self.bg_height):
                 self._mode, self._anchor_pt = "bg_resize", (x, y)
                 self._orig = (self.bg_width, self.bg_height)
             else:
@@ -847,6 +967,7 @@ class NodeCanvas(tk.Canvas):
             self.bg_x += dx
             self.bg_y += dy
             self.move("background", dx * z, dy * z)
+            self.move("bg_handle", dx * z, dy * z)
             self._last = (x, y)
         elif mode == "bg_resize":
             self.bg_width = max(50, self._orig[0] + x - self._anchor_pt[0])
@@ -917,6 +1038,9 @@ class NodeCanvas(tk.Canvas):
 
     def _on_motion(self, event):
         x, y = self._pos(event)
+        self._mouse = (x, y)
+        if self.alt_down and sys.platform.startswith("win") and not (getattr(event, "state", 0) & 0x20000):
+            self._set_alt(False)               # Alt relâché sans que l'événement clavier arrive
         sq = self._square_at(x, y)
         fd = None
         if sq is None:
@@ -932,12 +1056,10 @@ class NodeCanvas(tk.Canvas):
 
     def _update_cursor(self, x, y):
         cur = ""
-        sel = self.selected_square
-        if sel is not None and not sel.locked and self._visible(sel) and self.connecting_from is None:
-            if self._over_rot_handle(sel, x, y):
-                cur = "exchange"
-            elif self._over_resize(sel, x, y):
-                cur = "bottom_right_corner"
+        if self.alt_down and self.connecting_from is None:
+            hit = self._handle_at(x, y)
+            if hit:
+                cur = "exchange" if hit[1] == "rotate" else "bottom_right_corner"
         if cur != self._cursor:
             self._cursor = cur
             try:
@@ -989,11 +1111,11 @@ class NodeCanvas(tk.Canvas):
     # Actions (menu contextuel / raccourcis)
     # ------------------------------------------------------------------
     def _add_square_at_cursor(self):
-        name = self._ask_name("Nouveau carré")
+        name = self._ask_name("Nouveau carré") if self.ask_name_on_create else None
         self.add_square(self.context_menu_x, self.context_menu_y, size=self.square_size, name=name or "")
 
     def _add_folder_at_cursor(self):
-        title = self._ask_name("Nouveau dossier", "Dossier")
+        title = self._ask_name("Nouveau dossier", "Dossier") if self.ask_name_on_create else None
         self.add_folder(self.context_menu_x, self.context_menu_y, title=title or "Dossier")
 
     def _selected(self):
