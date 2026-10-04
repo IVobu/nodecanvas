@@ -685,7 +685,7 @@ class NodeCanvas(tk.Canvas):
         if sq:
             self._select(sq=sq)
             if not sq.locked:
-                if self._in_handle(x, y, sq.x + sq.size, sq.y + sq.size):
+                if event.state & 0x0008 and self._in_handle(x, y, sq.x + sq.size, sq.y + sq.size):
                     self._mode, self._anchor_pt, self._orig = "resize", (x, y), sq.size
                 else:
                     self._mode, self._last = "move", (x, y)

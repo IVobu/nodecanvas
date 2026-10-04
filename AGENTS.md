@@ -27,7 +27,7 @@ nodecanvas/
 - Pousser : `git push -u origin main` (HTTPS, auth via keyring gh).
 
 ## 4. Fonctionnalités actuelles (comportement réel)
-- Carrés : clic droit → nouveau/supprimer/couleur/nom ; glisser = déplacer ; handle jaune en bas-droite = resize ; `locked` = contour jaune, non déplaçable (menu "Verrouiller/Déverrouiller"). Création sans fenêtre de nom (renommage via F2 ou menu contextuel). Couleur des liens modifiable via menu contextuel "Changer couleur du lien…".
+- Carrés : clic droit → nouveau/supprimer/couleur/nom ; glisser = déplacer ; **Alt + handle jaune en bas-droite = resize** ; `locked` = contour jaune, non déplaçable (menu "Verrouiller/Déverrouiller"). Création sans fenêtre de nom (renommage via F2 ou menu contextuel). Couleur des liens modifiable via menu contextuel "Changer couleur du lien…".
 - Connexion : **double-clic sur carré A puis clic sur carré B** = lien (ou drag & drop) ; lien affiché uniquement au **survol** d'un des carrés connectés. Ligne dorée pointillée du centre de A vers le curseur pendant le mode connexion.
 - Dossiers : double-clic = replier/déplier (contenu masqué, icône avec compteur) ; en-tête glissable ; drop d'un carré sur un dossier ouvert = assignation ; resize possible.
 - Fond : menu "Fond" → charger/retirer/**verrouiller-déverrouiller** ; drag + handle visible en bas-droite (carré doré) ; état (x,y,w,h,locked) sauvegardé en JSON. Le verrou bloque drag/resize (contour doré pointillé).
