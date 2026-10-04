@@ -833,12 +833,10 @@ class NodeCanvas(tk.Canvas):
     # Actions (menu contextuel / raccourcis)
     # ------------------------------------------------------------------
     def _add_square_at_cursor(self):
-        name = self._ask_name("Nouveau carré")
-        self.add_square(self.context_menu_x, self.context_menu_y, size=self.square_size, name=name or "")
+        self.add_square(self.context_menu_x, self.context_menu_y, size=self.square_size)
 
     def _add_folder_at_cursor(self):
-        title = self._ask_name("Nouveau dossier", "Dossier")
-        self.add_folder(self.context_menu_x, self.context_menu_y, title=title or "Dossier")
+        self.add_folder(self.context_menu_x, self.context_menu_y)
 
     def _selected(self):
         return self.selected_square or self.selected_folder
