@@ -67,6 +67,7 @@ class NodeCanvas(tk.Canvas):
         self.bg_y = 0
         self.bg_width = 0
         self.bg_height = 0
+        self.bg_rotation = 0
 
         # --- vue ---
         self.zoom = 1.0
@@ -680,6 +681,7 @@ class NodeCanvas(tk.Canvas):
         self.bg_photo = None
         self.bg_x = self.bg_y = 0
         self.bg_width = self.bg_height = 0
+        self.bg_rotation = 0
         if not filepath or not PIL_AVAILABLE:
             return
         try:
@@ -1171,3 +1173,17 @@ class NodeCanvas(tk.Canvas):
             for ln in self.links:
                 ln.color = color
             self._update_links()
+
+    def _rotate_background(self):
+        if not self.background_image:
+            return
+        from dialogs import ask_string
+        value = ask_string(self.winfo_toplevel(), "Rotation du fond", "Angle en degrés :", str(getattr(self, "bg_rotation", 0)))
+        if value is None:
+            return
+        try:
+            angle = float(value)
+        except (ValueError, OverflowError):
+            return
+        self.bg_rotation = angle % 360
+        self._redraw_background()
