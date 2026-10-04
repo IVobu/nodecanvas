@@ -28,14 +28,17 @@ nodecanvas/
 
 ## 4. Fonctionnalités actuelles (comportement réel)
 - Carrés : clic droit → nouveau/supprimer/couleur/nom ; glisser = déplacer ; handle jaune en bas-droite = resize ; `locked` = contour jaune, non déplaçable (menu "Verrouiller/Déverrouiller").
-- Connexion : **double-clic sur carré A puis clic sur carré B** = lien ; lien affiché uniquement au **survol** d'un des carrés connectés (largeur réglable). Ligne dorée pointillée du centre de A vers le curseur pendant le mode connexion.
-- Dossiers : double-clic = replier/déplier (contenu masqué) ; en-tête glissable ; drop d'un carré sur un dossier ouvert = assignation.
+- Connexion : **double-clic sur carré A puis clic sur carré B** = lien (ou drag & drop) ; lien affiché uniquement au **survol** d'un des carrés connectés. Ligne dorée pointillée du centre de A vers le curseur pendant le mode connexion.
+- Dossiers : double-clic = replier/déplier (contenu masqué, icône avec compteur) ; en-tête glissable ; drop d'un carré sur un dossier ouvert = assignation ; resize possible.
 - Fond : menu "Fond" → charger/retirer/**verrouiller-déverrouiller** ; drag + handle visible en bas-droite (carré doré) ; état (x,y,w,h,locked) sauvegardé en JSON. Le verrou bloque drag/resize (contour doré pointillé).
 - Réglages : menu "Réglages" → taille par défaut des carrés (10-500), épaisseur des liens au survol (1-20).
 - Images : drop depuis l'explorateur (png/jpg/gif/bmp/**webp**), Ctrl+V presse-papiers (sauvegarde dans assets/), images redimensionnées dynamiquement avec le carré.
+- **Zoom** : molette (0.1x–2.0x), Ctrl+0 = reset, menu "Affichage" → zoom avant/arrière/100%.
+- **Mode "Ignorer les verrous"** : Ctrl+L ou menu "Affichage" → les éléments verrouillés laissent passer les clics.
+- **Raccourcis clavier** : Suppr = supprimer, F2 = renommer, Échap = annuler connexion, Ctrl+V = coller, Ctrl+0 = zoom 100%.
 - Pan : clic molette (scan_mark/scan_dragto) — les clics sont convertis en coordonnées canvas (`canvasx/canvasy`), donc pas de décalage.
 - Export/Import JSON manuel (pas d'auto-save).
-- **Performance** : rendu incrémental (Canvas.move) + tags préfixés (sq_, fd_) pour éviter les problèmes Tk.
+- **Performance** : rendu incrémental (Canvas.move) + tags préfixés (sq_, fd_) + zoom avec coordonnées monde/écran.
 
 ## 5. BUGS CONNUS (priorité d'intervention)
 | # | Bug | Statut |
@@ -52,14 +55,10 @@ nodecanvas/
 | B10 | Pan molette décalait les clics | **CORRIGÉ** |
 
 ## 6. FEATURES MANQUANTES (vs spec d'origine)
-1. **Dossiers non fonctionnels** : `folder_id` existe dans le modèle mais AUCUNE action "mettre un carré dans un dossier" → les dossiers sont purement décoratifs.
-2. **Repli** : les carrés internes ET leurs liens doivent être **masqués** quand le dossier est replié (choix utilisateur). Un lien externe → carré interne dans un dossier replié doit pointer vers le dossier (icône de regroupement).
-3. **Supprimer un lien** : impossible (pas d'UI).
-4. **Supprimer / renommer / colorer un dossier** : impossible.
-5. Pas de raccourcis clavier (Suppr = supprimer sélection, Échap = annuler connexion).
-6. Pas d'auto-save (Ctrl+S ou sauvegarde automatique).
-7. README obsolète (décrit l'ancien double-clic pour connecter ; pas de mention drag&drop/lock/WebP/presse-papiers).
-8. **NOTÉ (demande utilisateur, ne pas implémenter tout de suite)** : **Alt+clic sur un carré nouvellement créé → ouvrir directement le renommage**. Ne le faire qu'à la tâche dédiée.
+1. **Supprimer un lien** : impossible (pas d'UI).
+2. Pas d'auto-save (Ctrl+S ou sauvegarde automatique).
+3. README obsolète (décrit l'ancien double-clic pour connecter ; pas de mention drag&drop/lock/WebP/presse-papiers/zoom).
+4. **NOTÉ (demande utilisateur, ne pas implémenter tout de suite)** : **Alt+clic sur un carré nouvellement créé → ouvrir directement le renommage**. Ne le faire qu'à la tâche dédiée.
 
 ## 7. Décisions utilisateur à valider
 - Priorité : bugs d'abord, puis features manquantes ?
