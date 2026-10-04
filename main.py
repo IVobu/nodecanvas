@@ -1,6 +1,8 @@
+import json
+import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from canvas_widget import NodeCanvas
+from canvas_widget import NodeCanvas, _load_settings, _save_settings
 from storage import export_json, import_json
 
 
@@ -25,6 +27,10 @@ class NodeCanvasApp:
         file_menu.add_command(label="Exporter JSON", command=self._export)
         file_menu.add_command(label="Importer JSON", command=self._import)
         file_menu.add_separator()
+        self._recent_menu = tk.Menu(file_menu, tearoff=0)
+        file_menu.add_cascade(label="Récents", menu=self._recent_menu)
+        self._refresh_recent_menu()
+        file_menu.add_separator()
         file_menu.add_command(label="Quitter", command=self.root.quit)
 
         bg_menu = tk.Menu(menubar, tearoff=0)
@@ -41,6 +47,39 @@ class NodeCanvasApp:
         settings_menu.add_command(label="Taille par défaut des carrés…", command=self.canvas.set_default_square_size)
         settings_menu.add_command(label="Épaisseur des liens au survol…", command=self.canvas.set_link_width)
 
+    def _refresh_recent_menu(self):
+        self._recent_menu.delete(0, tk.END)
+        recents = _load_settings().get("recent_files", [])
+        if not recents:
+            self._recent_menu.add_command(label="(vide)", state=tk.DISABLED)
+        for path in recents:
+            self._recent_menu.add_command(label=path, command=lambda p=path: self._load_recent(p))
+
+    def _add_recent(self, filepath):
+        data = _load_settings()
+        recents = data.get("recent_files", [])
+        recents = [p for p in recents if p != filepath]
+        recents.insert(0, filepath)
+        data["recent_files"] = recents[:10]
+        _save_settings(data)
+        self._refresh_recent_menu()
+
+    def _load_recent(self, filepath):
+        if not os.path.exists(filepath):
+            messagebox.showerror("Erreur", f"Fichier introuvable : {filepath}")
+            return
+        try:
+            squares, links, folders, bg, settings = import_json(filepath)
+            self.canvas.load_data(squares, links, folders, bg)
+            if settings:
+                self.canvas.square_size = settings.get("square_size", 60)
+                self.canvas.link_width = settings.get("link_width", 3)
+                self.canvas.default_link_color = settings.get("link_color", "#888888")
+            self._add_recent(filepath)
+            messagebox.showinfo("Import", "Import réussi !")
+        except Exception as e:
+            messagebox.showerror("Erreur", str(e))
+
     def _export(self):
         filepath = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")])
         if filepath:
@@ -51,6 +90,7 @@ class NodeCanvasApp:
                     "link_width": getattr(self.canvas, "link_width", 3),
                 }
                 export_json(self.canvas.squares, self.canvas.links, self.canvas.folders, self.canvas.get_background_state(), filepath, settings)
+                self._add_recent(filepath)
                 messagebox.showinfo("Export", "Export réussi !")
             except Exception as e:
                 messagebox.showerror("Erreur", str(e))
@@ -65,6 +105,7 @@ class NodeCanvasApp:
                     self.canvas.square_size = settings.get("square_size", 60)
                     self.canvas.link_width = settings.get("link_width", 3)
                     self.canvas.default_link_color = settings.get("link_color", "#888888")
+                self._add_recent(filepath)
                 messagebox.showinfo("Import", "Import réussi !")
             except Exception as e:
                 messagebox.showerror("Erreur", str(e))
