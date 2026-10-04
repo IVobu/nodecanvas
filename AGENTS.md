@@ -8,7 +8,7 @@ Repo : https://github.com/IVobu/nodecanvas (public, compte IVobu).
 ```
 nodecanvas/
 ├── main.py           # Fenêtre Tkinter, menus (Fichier: Export/Import JSON, Fond: charger/retirer)
-├── canvas_widget.py  # NOEUD DU PROJET (~465 lignes) — rendu + interactions
+├── canvas_widget.py  # NOEUD DU PROJET (~567 lignes) — rendu + interactions
 ├── models.py         # Square (id,x,y,size,color,name,folder_id,image_path,locked), Link, Folder
 ├── storage.py        # export_json / import_json (format version 1)
 ├── dialogs.py        # ask_color, ask_string
@@ -28,25 +28,28 @@ nodecanvas/
 
 ## 4. Fonctionnalités actuelles (comportement réel)
 - Carrés : clic droit → nouveau/supprimer/couleur/nom ; glisser = déplacer ; handle jaune en bas-droite = resize ; `locked` = contour jaune, non déplaçable (menu "Verrouiller/Déverrouiller").
-- Connexion : **clic sur carré A puis clic sur carré B** = lien ; lien affiché uniquement au **survol** d'un des carrés connectés (largeur 3). Clic sur le même carré ou sur le vide annule le mode connexion.
-- Dossiers : double-clic = replier/déplier ; en-tête glissable.
-- Fond : menu "Fond" → charger/retirer ; drag + resize via handle (voir bug B1).
-- Images : drop depuis l'explorateur (png/jpg/gif/bmp/**webp**), Ctrl+V presse-papiers, taille max 300px.
-- Pan : clic molette (scan_mark/scan_dragto).
+- Connexion : **double-clic sur carré A puis clic sur carré B** = lien ; lien affiché uniquement au **survol** d'un des carrés connectés (largeur réglable). Ligne dorée pointillée du centre de A vers le curseur pendant le mode connexion.
+- Dossiers : double-clic = replier/déplier (contenu masqué) ; en-tête glissable ; drop d'un carré sur un dossier ouvert = assignation.
+- Fond : menu "Fond" → charger/retirer/**verrouiller-déverrouiller** ; drag + handle visible en bas-droite (carré doré) ; état (x,y,w,h,locked) sauvegardé en JSON. Le verrou bloque drag/resize (contour doré pointillé).
+- Réglages : menu "Réglages" → taille par défaut des carrés (10-500), épaisseur des liens au survol (1-20).
+- Images : drop depuis l'explorateur (png/jpg/gif/bmp/**webp**), Ctrl+V presse-papiers (sauvegarde dans assets/), images redimensionnées dynamiquement avec le carré.
+- Pan : clic molette (scan_mark/scan_dragto) — les clics sont convertis en coordonnées canvas (`canvasx/canvasy`), donc pas de décalage.
 - Export/Import JSON manuel (pas d'auto-save).
+- **Performance** : rendu incrémental (Canvas.move) + tags préfixés (sq_, fd_) pour éviter les problèmes Tk.
 
 ## 5. BUGS CONNUS (priorité d'intervention)
-| # | Bug | Localisation |
-|---|-----|--------------|
-| B1 | **Le fond intercepte les clics AVANT les carrés** → dès qu'un fond est chargé, aucun carré cliquable. Inverser l'ordre de détection : carrés > dossiers > fond | `canvas_widget.py` `_on_left_click` ~l.264 |
-| B2 | **Ctrl+V ne marche jamais** : `Image.LANCZOS` utilisé mais `from PIL import ImageGrab, ImageTk` → NameError avalé silencieusement par `except: pass`. Importer `Image` | `canvas_widget.py` `_paste_from_clipboard` ~l.129 |
-| B3 | **L'image ne grandit pas avec le carré** : `sq.photo` affichée à taille naturelle. Régénérer le PhotoImage à `sq.size` depuis le PIL source (LANCZOS) | `canvas_widget.py` `_draw_image_square` |
-| B4 | **Lag** : `_redraw()` appelle `_redraw_background()` = resize PIL à CHAQUE survol/clic/drag. Ne redessiner le fond que lorsqu'il change | `canvas_widget.py` `_redraw` ~l.223 |
-| B5 | **Import JSON perd les images** : `load_data` ne recharge pas `photo` depuis `image_path` | `canvas_widget.py` `load_data` ~l.460 |
-| B6 | **Ligne de connexion fantôme** : `_redraw()` supprime le tag `connect_line` mais `connecting_from` reste actif → état incohérent, pas de feedback visuel | `canvas_widget.py` `_redraw` / `_on_left_click` |
-| B7 | Fond : `bg_x/y/width/height` non sauvegardés dans le JSON → position/taille perdues à l'import | `storage.py` / export |
-| B8 | Drop : `event.data.split()` casse les chemins avec espaces (parser les blocs `{...}`) | `canvas_widget.py` `_on_drop` ~l.94 |
-| B9 | Code mort : `pan_start`, `offset_x/y` (l.29-30), `_start_connect` (l.405), import `os` inutilisé dans `storage.py` | divers |
+| # | Bug | Statut |
+|---|-----|--------|
+| B1 | Le fond intercepte les clics avant les carrés | **CORRIGÉ** |
+| B2 | Ctrl+V ne marche jamais (NameError Image) | **CORRIGÉ** |
+| B3 | L'image ne grandit pas avec le carré | **CORRIGÉ** |
+| B4 | Lag : fond redessiné à chaque survol | **CORRIGÉ** |
+| B5 | Import JSON perd les images | **CORRIGÉ** |
+| B6 | Ligne de connexion fantôme | **CORRIGÉ** |
+| B7 | Fond non sauvegardé dans le JSON | **CORRIGÉ** |
+| B8 | Drop : chemins avec espaces cassés | **CORRIGÉ** |
+| B9 | Code mort `os` dans storage.py | **CORRIGÉ** |
+| B10 | Pan molette décalait les clics | **CORRIGÉ** |
 
 ## 6. FEATURES MANQUANTES (vs spec d'origine)
 1. **Dossiers non fonctionnels** : `folder_id` existe dans le modèle mais AUCUNE action "mettre un carré dans un dossier" → les dossiers sont purement décoratifs.
@@ -56,6 +59,7 @@ nodecanvas/
 5. Pas de raccourcis clavier (Suppr = supprimer sélection, Échap = annuler connexion).
 6. Pas d'auto-save (Ctrl+S ou sauvegarde automatique).
 7. README obsolète (décrit l'ancien double-clic pour connecter ; pas de mention drag&drop/lock/WebP/presse-papiers).
+8. **NOTÉ (demande utilisateur, ne pas implémenter tout de suite)** : **Alt+clic sur un carré nouvellement créé → ouvrir directement le renommage**. Ne le faire qu'à la tâche dédiée.
 
 ## 7. Décisions utilisateur à valider
 - Priorité : bugs d'abord, puis features manquantes ?
