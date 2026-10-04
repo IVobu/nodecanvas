@@ -3,6 +3,13 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# AI agent files
+AGENTS.md
+agents.md
+.claude/
+.cursor/
+.copilot/
+
 # C extensions
 *.so
 
