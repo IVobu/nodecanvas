@@ -16,7 +16,7 @@ def _normalize_background(background):
     return dict(DEFAULT_BACKGROUND)
 
 
-def export_json(squares, links, folders, background, filepath):
+def export_json(squares, links, folders, background, filepath, settings=None):
     background = _normalize_background(background)
     data = {
         "version": 1,
@@ -25,6 +25,7 @@ def export_json(squares, links, folders, background, filepath):
         "squares": [sq.to_dict() for sq in squares],
         "links": [ln.to_dict() for ln in links],
         "folders": [fd.to_dict() for fd in folders],
+        "settings": settings or {"link_color": "#888888", "square_size": 60, "link_width": 3},
     }
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -41,4 +42,6 @@ def import_json(filepath):
     raw = data["background"] if "background" in data else data.get("background_image", "")
     background = _normalize_background(raw)
 
-    return squares, links, folders, background
+    settings = data.get("settings", {"link_color": "#888888", "square_size": 60, "link_width": 3})
+
+    return squares, links, folders, background, settings

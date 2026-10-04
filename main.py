@@ -45,7 +45,12 @@ class NodeCanvasApp:
         filepath = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")])
         if filepath:
             try:
-                export_json(self.canvas.squares, self.canvas.links, self.canvas.folders, self.canvas.get_background_state(), filepath)
+                settings = {
+                    "link_color": getattr(self.canvas, "default_link_color", "#888888"),
+                    "square_size": self.canvas.square_size,
+                    "link_width": getattr(self.canvas, "link_width", 3),
+                }
+                export_json(self.canvas.squares, self.canvas.links, self.canvas.folders, self.canvas.get_background_state(), filepath, settings)
                 messagebox.showinfo("Export", "Export réussi !")
             except Exception as e:
                 messagebox.showerror("Erreur", str(e))
@@ -54,8 +59,12 @@ class NodeCanvasApp:
         filepath = filedialog.askopenfilename(filetypes=[("JSON files", "*.json")])
         if filepath:
             try:
-                squares, links, folders, bg = import_json(filepath)
+                squares, links, folders, bg, settings = import_json(filepath)
                 self.canvas.load_data(squares, links, folders, bg)
+                if settings:
+                    self.canvas.square_size = settings.get("square_size", 60)
+                    self.canvas.link_width = settings.get("link_width", 3)
+                    self.canvas.default_link_color = settings.get("link_color", "#888888")
                 messagebox.showinfo("Import", "Import réussi !")
             except Exception as e:
                 messagebox.showerror("Erreur", str(e))

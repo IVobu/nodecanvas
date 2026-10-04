@@ -101,6 +101,7 @@ class NodeCanvas(tk.Canvas):
         m.add_command(label="Coller image (Ctrl+V)", command=self._paste_from_clipboard)
         m.add_separator()
         m.add_command(label="Tourner image…", command=self._rotate_image)
+        m.add_command(label="Flip image…", command=self._flip_image)
         m.add_separator()
         m.add_command(label="Changer couleur du lien…", command=self._change_link_color)
         m.add_separator()
@@ -537,13 +538,17 @@ class NodeCanvas(tk.Canvas):
         if img is None:
             return None
         box = max(int(sq.size * self.zoom) - 4, 1)
-        key = (box, fast, sq.rotation)
+        key = (box, fast, sq.rotation, sq.flip)
         cached = self._photo_cache.get(sq.id)
         if cached and cached[0] == key:
             return cached[1]
         scale = min(box / img.width, box / img.height)
         size = (max(int(img.width * scale), 1), max(int(img.height * scale), 1))
         img = img.resize(size, Image.NEAREST if fast else Image.LANCZOS)
+        if sq.flip & 1:
+            img = img.transpose(Image.FLIP_LEFT_RIGHT)
+        if sq.flip & 2:
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)
         if sq.rotation:
             img = img.rotate(-sq.rotation, expand=True, resample=Image.BICUBIC)
         photo = ImageTk.PhotoImage(img)
@@ -974,16 +979,28 @@ class NodeCanvas(tk.Canvas):
         self.link_width = max(1, min(20, width))
 
     def _change_link_color(self):
-        sq = self.selected_square
-        if not sq:
-            return
         from dialogs import ask_color
         color = ask_color(self.winfo_toplevel(), "#888888")
         if color:
             for ln in self.links:
-                if sq.id in (ln.source_id, ln.target_id):
-                    ln.color = color
+                ln.color = color
             self._update_links()
+
+    def _flip_image(self):
+        sq = self.selected_square
+        if not sq or not sq.image_path:
+            return
+        from dialogs import ask_string
+        value = ask_string(self.winfo_toplevel(), "Flip image", "0=aucun, 1=horizontal, 2=vertical, 3=les deux :", str(sq.flip))
+        if value is None:
+            return
+        try:
+            flip = int(value)
+        except (ValueError, OverflowError):
+            return
+        sq.flip = flip & 3
+        self._photo_cache.pop(sq.id, None)
+        self._draw_square(sq)
 
     def _rotate_image(self):
         sq = self.selected_square
