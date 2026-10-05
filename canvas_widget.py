@@ -71,6 +71,7 @@ DEFAULT_SETTINGS = {
     "lock_square_colors": False,
     "lock_square_positions": False,
     "link_visibility": "hover",
+    "hide_image_square_outline": False,
 }
 
 
@@ -135,6 +136,7 @@ class NodeCanvas(tk.Canvas):
         self.default_square_name2 = _settings.get("default_square_name2", "Bleu")
         self.lock_square_colors = bool(_settings.get("lock_square_colors", False))
         self.lock_square_positions = bool(_settings.get("lock_square_positions", False))
+        self.hide_image_square_outline = bool(_settings.get("hide_image_square_outline", False))
         visibility = _settings.get("link_visibility", "hover")
         self.link_visibility = visibility if visibility in ("hover", "selection", "all") else "hover"
         self.undo_depth = max(1, min(500, int(_settings.get("undo_depth", 50))))
@@ -379,6 +381,10 @@ class NodeCanvas(tk.Canvas):
             vm.add_checkbutton(label="Verrouiller la position des carrés",
                                variable=self._lock_positions_var,
                                command=self._on_lock_positions_menu)
+            self._hide_image_outline_var = tk.BooleanVar(value=self.hide_image_square_outline)
+            vm.add_checkbutton(label="Masquer le contour des carrés-image",
+                               variable=self._hide_image_outline_var,
+                               command=self._on_hide_image_outline_menu)
             vm.add_separator()
             self._link_visibility_var = tk.StringVar(value=self.link_visibility)
             links_menu = tk.Menu(vm, tearoff=0)
@@ -710,6 +716,11 @@ class NodeCanvas(tk.Canvas):
         self._notice("Positions des carrés verrouillées" if self.lock_square_positions
                      else "Positions des carrés déverrouillées")
 
+    def _on_hide_image_outline_menu(self):
+        self.hide_image_square_outline = bool(self._hide_image_outline_var.get())
+        self.save_settings()
+        self._redraw()
+
     def _on_link_visibility_menu(self):
         self.link_visibility = self._link_visibility_var.get()
         self._update_links()
@@ -776,6 +787,8 @@ class NodeCanvas(tk.Canvas):
 
         if self._is_selected(sq):
             outline, width = SELECT_COLOR, 3
+        elif sq.image_path and self.hide_image_square_outline:
+            outline, width = "", 0
         elif sq.locked:
             outline, width = LOCK_COLOR, 3
         else:
@@ -2067,6 +2080,7 @@ class NodeCanvas(tk.Canvas):
             "lock_square_colors": bool(self.lock_square_colors),
             "lock_square_positions": bool(self.lock_square_positions),
             "link_visibility": self.link_visibility,
+            "hide_image_square_outline": bool(self.hide_image_square_outline),
         })
         _save_settings(data)
 

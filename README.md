@@ -5,6 +5,7 @@ Application de bureau Python/Tkinter pour créer des carrés colorés, les relie
 ## Fonctionnalités
 
 - **Carrés colorés** : couleur, nom et taille modifiables, avec images
+- **Contour des images** : Affichage → « Masquer le contour des carrés-image » retire le contour blanc/jaune des carrés-image non sélectionnés sans toucher aux contours des carrés colorés. Le surlignage bleu d'un carré sélectionné reste visible.
 - **Recadrage des images** : `C` affiche des poignées sur l'image sélectionnée ; tirez un coin puis validez avec `Entrée` ou annulez avec `Échap`. L'application enregistre une copie recadrée dans `assets/`, sans modifier l'original ; `Ctrl+Z` restaure l'image précédente.
 - **Multi-sélection** : glisser depuis un espace vide (ou un fond non déplaçable) pour sélectionner une zone ; un fond déverrouillé reste déplaçable quand l'option le permet, `Maj` reste accepté, `Maj`+clic pour ajouter, `Alt`+clic pour retirer
 - **Opérations groupées** : déplacer, redimensionner, tourner, recolorer, verrouiller ou supprimer toute une sélection
@@ -68,6 +69,7 @@ python main.py
 | Renommer le fond | Double-clic sur le fond |
 | Ignorer les éléments verrouillés | `Ctrl+L` |
 | Afficher les connexions | Affichage → Afficher les connexions |
+| Masquer le contour blanc/jaune des carrés-image | Affichage → Masquer le contour des carrés-image |
 | Verrouiller / déverrouiller les couleurs des carrés | Affichage → Verrouiller la couleur des carrés |
 | Verrouiller / déverrouiller les positions des carrés | Affichage → Verrouiller la position des carrés |
 | Ouvrir le menu d'un carré verrouillé (pour le déverrouiller) | Clic droit |
